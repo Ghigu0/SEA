@@ -62,38 +62,26 @@ struct Config {
     bool verbose = false;
 };
 
-// -------------------- Arg parsing / usage --------------------
 
-struct ParsedArgs {
-  Config cfg;
-  bool is_query = false;   // true => fase 2, false => fase 1
-  bool show_help = false;
-};
 
 static void print_usage(const char* prog) {
   std::cout
       << "Usage:\n"
-      << "  " << prog << " [build options] --full-db <PATH> --dedup-db <PATH> [common]\n"
-      << "  " << prog << " [query options] --dedup-db <PATH> --q <FRAME_PATH> [common]\n\n"
-      << "Common options:\n"
+      << " <full-db_PATH> <dedup-db_PATH> <frame_PATH>\n"
       << "  --gpu <id>              GPU id (default 0)\n"
       << "  --verbose               Logging verboso\n"
-      << "  --help, -h              Stampa questo help\n\n"
-      << "Build (fase 1) options:\n"
-      << "  --full-db <PATH>        Percorso DB grezzo da prelevare/sn ellire\n"
-      << "  --dedup-db <PATH>       Percorso dove salvare il DB snellito\n"
-      << "  --no-dedup              Disabilita deduplication\n\n"
-      << "Query (fase 2) options:\n"
-      << "  --q <FRAME_PATH>        Percorso del frame da cercare\n"
-      << "  --no-index              Disabilita pre-match via indici (candidati = tutti)\n"
-      << "  --topk <K>              Numero candidati post-index (default 50)\n"
-      << "  --no-template           Disabilita template matching\n";
+      << "  --no-dedup              per disabilitare la deduplication "
+      << "  --no-index              per disabilitare l'utilizzo degli indici "
+      << "  --topk                  per specificare quanti indici salvare per proseguire con il template matching"
+      << "  --no-template           per disabilitare il template matching ";
 }
 
+// guarda se uno degli argomenti è un flag o meno 
 static bool is_flag(const std::string& s, const char* f) {
   return s == f;
 }
 
+// per convertire una stringa in un numero intero ( per il parsing degli argomenti del main )
 static int to_int_or_die(const std::string& s, const char* what) {
   char* end = nullptr;
   long v = std::strtol(s.c_str(), &end, 10);
@@ -104,126 +92,73 @@ static int to_int_or_die(const std::string& s, const char* what) {
   return static_cast<int>(v);
 }
 
-static ParsedArgs parse_args(int argc, char** argv) {
-  ParsedArgs out;
-  Config& cfg = out.cfg;
-
-  if (argc < 2) {
-    out.show_help = true;
-    return out;
+static Config parse_args(int argc, char** argv) {
+  Config cfg;
+  // default: se non passi niente, mostro help e termino
+  if (argc < 4) {
+    print_usage(argv[0]);
+    std::exit(0);
   }
-
-  // Nota: non usiamo più "Mode". Decidiamo la fase in base alla presenza di --q
-  for (int i = 1; i < argc; ++i) {
+  cfg.full_db_path         = argv[1];
+  cfg.deduplicated_db_path = argv[2];
+  cfg.query_frame_path     = argv[3];
+  for (int i = 4; i < argc; ++i) {
     std::string a = argv[i];
-
     if (is_flag(a, "--help") || is_flag(a, "-h")) {
-      out.show_help = true;
-      return out;
+      print_usage(argv[0]);
+      std::exit(0);
     }
-
     if (is_flag(a, "--gpu")) {
       if (++i >= argc) { std::cerr << "--gpu needs a value\n"; std::exit(2); }
       cfg.gpu_id = to_int_or_die(argv[i], "--gpu");
       continue;
     }
-
     if (is_flag(a, "--verbose")) {
       cfg.verbose = true;
       continue;
     }
-
-    // Build paths
-    if (is_flag(a, "--full-db")) {
-      if (++i >= argc) { std::cerr << "--full-db needs a value\n"; std::exit(2); }
-      cfg.full_db_path = argv[i];
-      continue;
-    }
-
-    if (is_flag(a, "--dedup-db")) {
-      if (++i >= argc) { std::cerr << "--dedup-db needs a value\n"; std::exit(2); }
-      cfg.deduplicated_db_path = argv[i];
-      continue;
-    }
-
     if (is_flag(a, "--no-dedup")) {
       cfg.enable_dedup = false;
       continue;
     }
-
-    // Query
-    if (is_flag(a, "--q")) {
-      if (++i >= argc) { std::cerr << "--q needs a value\n"; std::exit(2); }
-      cfg.query_frame_path = argv[i];
-      out.is_query = true;
-      continue;
-    }
-
     if (is_flag(a, "--no-index")) {
       cfg.enable_index_match = false;
       continue;
     }
-
     if (is_flag(a, "--topk")) {
       if (++i >= argc) { std::cerr << "--topk needs a value\n"; std::exit(2); }
       cfg.topk = to_int_or_die(argv[i], "--topk");
       continue;
     }
-
     if (is_flag(a, "--no-template")) {
       cfg.enable_template_match = false;
       continue;
     }
-
     std::cerr << "Unknown arg: " << a << "\n";
     std::exit(2);
   }
 
-  // Se non c'è --q allora è build (fase 1) per default.
-  return out;
-}
-
-static void validate_or_die(const ParsedArgs& args) {
-  const Config& cfg = args.cfg;
-
-  if (args.show_help) return;
-
-  // dedup-db serve sempre: in build è output, in query è input (DB snellito)
-  if (cfg.deduplicated_db_path.empty()) {
-    std::cerr << "Missing --dedup-db <PATH>\n";
+  // Validazione minima: siccome fai sempre entrambe le fasi,
+  // mi aspetto che questi siano presenti.
+ 
+  if (cfg.topk <= 0) {
+    std::cerr << "--topk must be > 0\n";
     std::exit(2);
   }
-
-  if (!args.is_query) {
-    // BUILD (fase 1)
-    if (cfg.full_db_path.empty()) {
-      std::cerr << "build: missing --full-db <PATH>\n";
-      std::exit(2);
-    }
-  } else {
-    // QUERY (fase 2)
-    if (cfg.query_frame_path.empty()) {
-      std::cerr << "query: missing --q <FRAME_PATH>\n";
-      std::exit(2);
-    }
-    if (cfg.topk <= 0) {
-      std::cerr << "query: --topk must be > 0\n";
-      std::exit(2);
-    }
-  }
+  return cfg;
 }
 
-// -------------------- Pipeline stubs --------------------
-// Qui dentro per ora metti solo "glue". La logica vera la sposterai in moduli.
 
+//                                                   CARICAMENTO DEL DB
+/* ########################################################################################################### */
 struct BuildStats {
-  uint64_t frames_total = 0;
-  uint64_t frames_after_dedup = 0;
-  uint64_t signatures_written = 0;
+  uint64_t frames_total = 0;        // quanti frame abbiamo letto
+  uint64_t frames_after_dedup = 0;  // quanti frame ci sono rimasti dopo il dedup
+  uint64_t signatures_written = 0;  // quante firme hai salvato ( direi che deve essere uguale a frames_after_dedup)
 };
 
-static BuildStats build_db_pipeline(const Config& cfg) {
-  ScopedTimer t("build_db_pipeline");
+static BuildStats database_deduplication(const Config& cfg) {
+  ScopedTimer t("database_deduplication");
 
   if (cfg.verbose) {
     std::cerr << "[BUILD] full_db_path=" << cfg.full_db_path
@@ -231,7 +166,7 @@ static BuildStats build_db_pipeline(const Config& cfg) {
               << " dedup=" << (cfg.enable_dedup ? "on" : "off")
               << "\n";
   }
-
+  /* in questa parte dobbiamo lanciare le funzioni kernel definite altrove  */
   // TODO:
   // 1) load DB grezzo dal path cfg.full_db_path (es. cartella con i video)
   // 2) frame dedup (se cfg.enable_dedup)
@@ -242,6 +177,8 @@ static BuildStats build_db_pipeline(const Config& cfg) {
   return st;
 }
 
+//                                                   RICERCA DEL FRAME
+/* ########################################################################################################### */
 struct QueryResult {
   bool found = false;
   int video_id = -1;
@@ -249,8 +186,8 @@ struct QueryResult {
   float score = 0.0f;
 };
 
-static QueryResult query_pipeline(const Config& cfg) {
-  ScopedTimer t("query_pipeline");
+static QueryResult ricerca_frame(const Config& cfg) {
+  ScopedTimer t("ricerca_frame");
 
   if (cfg.verbose) {
     std::cerr << "[QUERY] deduplicated_db_path=" << cfg.deduplicated_db_path
@@ -278,7 +215,9 @@ static QueryResult query_pipeline(const Config& cfg) {
   return r;
 }
 
-// -------------------- Main --------------------
+
+//                                                   MAIN
+/* ########################################################################################################### */
 
 static void print_gpu_info(int gpu_id) {
   int count = 0;
@@ -291,7 +230,6 @@ static void print_gpu_info(int gpu_id) {
     std::cerr << "Invalid --gpu " << gpu_id << " (device count=" << count << ")\n";
     std::exit(2);
   }
-
   CUDA_CHECK(cudaSetDevice(gpu_id));
   cudaDeviceProp prop{};
   CUDA_CHECK(cudaGetDeviceProperties(&prop, gpu_id));
@@ -300,25 +238,26 @@ static void print_gpu_info(int gpu_id) {
 }
 
 int main(int argc, char** argv) {
-  ParsedArgs args = parse_args(argc, argv);
-  if (args.show_help) {
-    print_usage(argv[0]);
-    return 0;
-  }
 
-  validate_or_die(args);
-  print_gpu_info(args.cfg.gpu_id);
+  ParsedArgs args = parse_args(argc, argv); // verificare che gli argomenti da linea di comando siano corretti 
+  print_gpu_info(args.cfg.gpu_id);          // stampa le caratteristiche della GPU utilizzata
 
   try {
-    if (!args.is_query) {
-      ScopedTimer t("TOTAL build");
-      BuildStats st = build_db_pipeline(args.cfg);
+
+    // chiama la funzione build database e stampa informazioni sulla quantità di dati processati
+      BuildStats st = database_deduplication(cfg);
       std::cerr << "[BUILD DONE] frames_total=" << st.frames_total
                 << " frames_after_dedup=" << st.frames_after_dedup
                 << " signatures_written=" << st.signatures_written << "\n";
-    } else {
-      ScopedTimer t("TOTAL query");
-      QueryResult r = query_pipeline(args.cfg);
+    
+    
+    /* la sincornizzazione in dei kernel in realtà è a carico delle funzioni, tuttavia è estremamente importante che prima che inizi 
+     la parte di ricerca frame il kernel riferito alla creazione del database sia finito  */   
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+
+    // chiama la funzione di ricerca del frame
+      QueryResult r = ricerca_frame(cfg);
       if (!r.found) {
         std::cerr << "[QUERY DONE] not found\n";
         return 1;
@@ -326,12 +265,14 @@ int main(int argc, char** argv) {
       std::cerr << "[QUERY DONE] found video_id=" << r.video_id
                 << " frame_id=" << r.frame_id
                 << " score=" << r.score << "\n";
-    }
+    
   } catch (const std::exception& e) {
     std::cerr << "[FATAL] Exception: " << e.what() << "\n";
     return 1;
   }
 
+  // per sicurezza 
   CUDA_CHECK(cudaDeviceSynchronize());
   return 0;
+
 }
