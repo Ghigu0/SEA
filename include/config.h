@@ -9,7 +9,7 @@ struct Config {
 
     // parametri per la prima fase del caricamento del database
     std::string full_db_path;                    // path del DB da prelevare e snellire
-    std::string deduplicated_db_path;            // path dove salvare il DB snellito dopo la frame deduplication
+    std::string deduplicated_db_path;            // path dove salvare il DB snellito dopo la frame deduplication ( per ragioni di efficienza sarà un file binario )
     int gpu_id = 0;                              // serve per settare quale GPU usare (se ne hai più di una) nel codice è presente la funzione cudaSetDevice( gpu_id )
     bool enable_dedup = true;                    // per dire al programma se effettuare o meno la deduplication ( utile per effettuare poi dei confronti )
 
@@ -29,4 +29,11 @@ struct Config {
     /* questo parametro serve per abilitare o disabilitare le printf. abilitarle significa ridurre di molto le performance.
     Nei kernel CUDA preferirei non mettere proprio le printf neanche dentro ai branch sinceramente                      */
     bool verbose = false;
+};
+
+
+struct BuildStats {
+  uint64_t frames_total = 0;        // quanti frame abbiamo letto
+  uint64_t frames_after_dedup = 0;  // quanti frame ci sono rimasti dopo il dedup
+  uint64_t signatures_written = 0;  // quante firme hai salvato ( direi che deve essere uguale a frames_after_dedup)
 };

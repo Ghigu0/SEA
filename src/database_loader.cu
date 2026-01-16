@@ -10,86 +10,93 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include "../include/config.h"
+#include "../include/cuda_utils.h"
+
+
 
 // ============================================================
-//  Utils
+//  strutture dati usate (dichiarate negli header)
 // ============================================================
-#define CUDA_CHECK(x)                                                      \
-  do {                                                                     \
-    cudaError_t err__ = (x);                                               \
-    if (err__ != cudaSuccess) {                                            \
-      throw std::runtime_error(std::string("CUDA error: ") +               \
-                               cudaGetErrorString(err__) +                \
-                               " @ " + __FILE__ + ":" + std::to_string(__LINE__)); \
-    }                                                                      \
-  } while (0)
 
-// ============================================================
-//  Config + Stats (adatta ai tuoi)
-// ============================================================
+/* inclusa dall'header
 struct Config {
-  std::string full_db_path;          // cartella/video list ecc.
-  std::string deduplicated_db_path;  // output SoA (hashes + metadati)
+  
+    std::string full_db_path;                    // path del DB da prelevare e snellire
+    std::string deduplicated_db_path;            // path dove salvare il DB snellito dopo la frame deduplication
+    int gpu_id = 0;                              // serve per settare quale GPU usare (se ne hai più di una) nel codice è presente la funzione cudaSetDevice( gpu_id )
+    bool enable_dedup = true;                    // per dire al programma se effettuare o meno la deduplication ( utile per effettuare poi dei confronti )
 
-  int frame_w = 640;
-  int frame_h = 360;
-  int channels = 1;                 // 1=grayscale, 3=RGB
-  int chunk_frames = 2048;          // batch/chunk size
-  bool enable_dedup = true;
+   
+    int frame_w = 1280;                          // larghezza frame (es. HD 1280x720)
+    int frame_h = 720;                           // altezza frame
+    int channels = 3;                            // 1=grayscale, 3=RGB
+    int chunk_frames = 2048;                     // batch/chunk size (vedremo poi con nsight)
+    int dedup_threshold = 0;                     // per definire quando due frame devono essere considerati duplicati
 
-  // parametri dedup/index (placeholder)
-  int dedup_threshold = 0;
-};
+   
+    std::string query_frame_path;                // path del frame da cercare
+    bool enable_index_match = true;              // in caso per fare un paragone si può disabilitare la ricerca preliminare per indici
+    int topk = 50;                               // nel caso in cui sia abilitata, se non si specifica nulla per default il template matching sarà sui primi 50 risultati dagli indici
+    bool enable_template_match = true;           // per abilitare il template matching
+
+    bool verbose = false;
+}; 
+
+nel file config 
 
 struct BuildStats {
-  uint64_t frames_total = 0;
-  uint64_t frames_after_dedup = 0;
-  uint64_t signatures_written = 0;
+  uint64_t frames_total = 0;        // quanti frame abbiamo letto
+  uint64_t frames_after_dedup = 0;  // quanti frame ci sono rimasti dopo il dedup
+  uint64_t signatures_written = 0;  // quante firme hai salvato ( direi che deve essere uguale a frames_after_dedup)
 };
 
-// ============================================================
-//  Layout SoA output (quello che scriverai su disco)
-// ============================================================
 struct DbSoAChunk {
-  // Per i "kept" del chunk
-  std::vector<uint64_t> hashes;   // [kept]
-  std::vector<int32_t>  video_id; // [kept]
-  std::vector<int32_t>  frame_id; // [kept]
-  // opzionale: offset, timestamp, ecc.
-  // std::vector<uint64_t> offset;
+  
+  std::vector<uint64_t> hashes;   
+  std::vector<int32_t>  video_id; 
+  std::vector<int32_t>  frame_id; 
+  std::vector<uint64_t> offset_bytes;  
+ 
 };
+*/
 
 // ============================================================
-//  Workspace (buffer riusabili) - qui lo definiamo nello stesso file
+//  set up Workspace 
 // ============================================================
+
 struct Workspace {
-  // dimensionamento
-  int max_frames = 0;
-  int w = 0, h = 0, c = 0;
+  
+  int max_frames = 0;               // max frames che il worksapce elabora insieme: sarà cfg.chunk_frames per reference
+  int w = 0, h = 0, c = 0;          // info che verranno prese sempre da Config
   size_t bytes_per_frame = 0;
 
-  // --- GPU buffers ---
-  uint8_t*  d_frames = nullptr;     // [max_frames * bytes_per_frame]
-  uint8_t*  d_keep   = nullptr;     // [max_frames] 0/1
+  // buffer pe la GPU 
+  uint8_t*  d_frames = nullptr;     // [max_frames * bytes_per_frame] ovvero contiene tutti i frame del chunk considerato
+  uint8_t*  d_keep   = nullptr;     // [max_frames] array di 0 / 1 per capire se il frame è scartato o salvato 
+
+    /*Su GPU ogni thread lavora su un indice i diverso.
+    Ogni thread che ha d_keep[i] == 1 deve sapere:
+    “In quale posizione dell’array compatto devo scrivere i?”
+    d_pos risponde esattamente a questa domanda.*/
+
   int32_t*  d_pos    = nullptr;     // [max_frames] (scan output / posizioni)
-  int32_t*  d_kept_ids = nullptr;   // [max_frames] lista compatta degli indici kept
+  int32_t*  d_kept_ids = nullptr;   // [max_frames] lista compatta degli indici da tenere,  ovver se keep è [1, 0, 0, 1, 1] allora d_kept_ids sarà [0, 3, 4]
   uint64_t* d_hashes = nullptr;     // [max_frames] hashes per kept (puoi anche allocare max_frames)
 
   // --- Host pinned (per scaricare veloce) ---
-  uint64_t* h_hashes = nullptr;     // [max_frames]
-  int32_t*  h_kept_ids = nullptr;   // [max_frames]
+  uint64_t* h_hashes = nullptr;     // per salvare le firme di quelli che tieni 
+  int32_t*  h_kept_ids = nullptr;   // per salvare gli id compatti di quelli che tieni (lato host )
 
-  // --- CUDA objects ---
-  cudaStream_t stream = nullptr;
-
-  // --- temp memory per scan/compaction (placeholder) ---
+  // buffer di appoggio temporanei
   void*  d_temp = nullptr;
   size_t d_temp_bytes = 0;
 
-  Workspace() = default;
 };
 
-// Inizializza workspace (alloca una volta)
+/* Inizializiamo il workspace, allocando sulla GPU gli spazi di memoria che ci serviranno. L'allocazione 
+avviene prima dell'esecuzione degli algortimi, i quali essendo iterativi comportrebbero una continua allocazione e deallocazione della memoria 
+*/
 static void workspace_init(Workspace& ws, const Config& cfg) {
   ws.max_frames = cfg.chunk_frames;
   ws.w = cfg.frame_w;
@@ -97,14 +104,13 @@ static void workspace_init(Workspace& ws, const Config& cfg) {
   ws.c = cfg.channels;
   ws.bytes_per_frame = static_cast<size_t>(ws.w) * ws.h * ws.c;
 
-  CUDA_CHECK(cudaStreamCreate(&ws.stream));
-
   CUDA_CHECK(cudaMalloc(&ws.d_frames,   ws.max_frames * ws.bytes_per_frame));
   CUDA_CHECK(cudaMalloc(&ws.d_keep,     ws.max_frames * sizeof(uint8_t)));
   CUDA_CHECK(cudaMalloc(&ws.d_pos,      ws.max_frames * sizeof(int32_t)));
   CUDA_CHECK(cudaMalloc(&ws.d_kept_ids, ws.max_frames * sizeof(int32_t)));
   CUDA_CHECK(cudaMalloc(&ws.d_hashes,   ws.max_frames * sizeof(uint64_t)));
 
+  // cudaMallocHost permette di allocare della memoria sull'host NON SWAPPABILE dal SO: (usiamola con criterio eh )
   CUDA_CHECK(cudaMallocHost(&ws.h_hashes,   ws.max_frames * sizeof(uint64_t)));
   CUDA_CHECK(cudaMallocHost(&ws.h_kept_ids, ws.max_frames * sizeof(int32_t)));
 
@@ -116,7 +122,8 @@ static void workspace_init(Workspace& ws, const Config& cfg) {
             << " bytes_per_frame=" << ws.bytes_per_frame << "\n";
 }
 
-// Libera workspace (RAII manuale)
+// deallocazione del Workspace
+
 static void workspace_destroy(Workspace& ws) {
   if (ws.d_temp)     cudaFree(ws.d_temp);
   if (ws.d_hashes)   cudaFree(ws.d_hashes);
@@ -124,18 +131,17 @@ static void workspace_destroy(Workspace& ws) {
   if (ws.d_pos)      cudaFree(ws.d_pos);
   if (ws.d_keep)     cudaFree(ws.d_keep);
   if (ws.d_frames)   cudaFree(ws.d_frames);
-
   if (ws.h_kept_ids) cudaFreeHost(ws.h_kept_ids);
   if (ws.h_hashes)   cudaFreeHost(ws.h_hashes);
-
   if (ws.stream)     cudaStreamDestroy(ws.stream);
 
+  // assegni un nuovo oggetto Workspace vuoto
   ws = Workspace{};
 }
 
-// ============================================================
-//  I/O: placeholder (tu li implementi davvero altrove)
-// ============================================================
+//============================================================
+//  I/O
+//============================================================
 
 // Un chunk CPU: frame bytes contigui + metadati associati
 struct HostChunk {
@@ -163,6 +169,7 @@ struct RawDbReader {
     // ch.frame_id.resize(ch.n)
     return ch;
   }
+  
 };
 
 // Writer SoA (placeholder)
