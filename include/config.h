@@ -18,7 +18,7 @@ struct Config {
     int frame_h = 720;                           // altezza frame
     int channels = 3;                            // 1=grayscale, 3=RGB
     int chunk_frames = 2048;                     // batch/chunk size (vedremo poi con nsight)
-    int dedup_threshold = 0;                     // per definire quando due frame devono essere considerati duplicati
+    int dedup_threshold = 10000;                     // per definire quando due frame devono essere considerati duplicati
 
     // parametri per la seconda fase della ricerca del frame
     std::string query_frame_path;                // path del frame da cercare

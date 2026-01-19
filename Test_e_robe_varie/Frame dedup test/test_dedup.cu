@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     cfg.gpu_id = 0;
     cfg.enable_dedup = true;
     cfg.chunk_frames = 256;        // per debug: piccolo
-    cfg.dedup_threshold = 8000;    // start per 32x18 (tuning dopo)
+    cfg.dedup_threshold = 10000;    // start per 32x18 (tuning dopo)
     // cfg.frame_w / frame_h / channels devono essere coerenti col RawDbReader
     // Se il RawDbReader ricava dimensioni da sorgente, assicurati che cfg combaci.
 

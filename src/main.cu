@@ -12,7 +12,9 @@
 #include <vector>
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
-
+#include "../include/raw_db_reader.h"
+#include "../include/db_types.h"
+#include "../include/database_loader.cuh"
 
 
 // funzione da chiamare prima di una funzione che cronometra il tempo. Termina in automatico prima della return e stampa il tempo
@@ -44,7 +46,7 @@ struct Config {
     int frame_h = 720;                           // altezza frame
     int channels = 3;                            // 1=grayscale, 3=RGB
     int chunk_frames = 2048;                     // batch/chunk size (vedremo poi con nsight)
-    int dedup_threshold = 0;                     // per definire quando due frame devono essere considerati duplicati
+    int dedup_threshold = 10000;                     // per definire quando due frame devono essere considerati duplicati
 
    
     std::string query_frame_path;                // path del frame da cercare
@@ -142,42 +144,12 @@ static Config parse_args(int argc, char** argv) {
 }
 
 
-//                                                   CARICAMENTO DEL DB
-/* nel file config 
-struct BuildStats {
-  uint64_t frames_total = 0;        // quanti frame abbiamo letto
-  uint64_t frames_after_dedup = 0;  // quanti frame ci sono rimasti dopo il dedup
-  uint64_t signatures_written = 0;  // quante firme hai salvato ( direi che deve essere uguale a frames_after_dedup)
-};
-*/
-static BuildStats database_deduplication(const Config& cfg) {
-  ScopedTimer t("database_deduplication");
-
-  if (cfg.verbose) {
-    std::cerr << "[BUILD] full_db_path=" << cfg.full_db_path
-              << " deduplicated_db_path=" << cfg.deduplicated_db_path
-              << " dedup=" << (cfg.enable_dedup ? "on" : "off")
-              << "\n";
-  }
-
-  // la variabile config la passi per riferimento, la definizione della struct sta negli header 
 
 
 
+/* ########################################################################################################### 
+  ricerca del frame, andrà in un file separato 
 
-  /* in questa parte dobbiamo lanciare le funzioni kernel definite altrove  */
-  // TODO:
-  // 1) load DB grezzo dal path cfg.full_db_path (es. cartella con i video)
-  // 2) frame dedup (se cfg.enable_dedup)
-  // 3) compute signatures + index
-  // 4) write DB snellito (SoA) to cfg.deduplicated_db_path
-
-  BuildStats st;
-  return st;
-}
-
-//                                                   RICERCA DEL FRAME
-/* ########################################################################################################### */
 struct QueryResult {
   bool found = false;
   int video_id = -1;
@@ -213,7 +185,7 @@ static QueryResult ricerca_frame(const Config& cfg) {
   QueryResult r;
   return r;
 }
-
+*/
 
 //                                                   MAIN
 /* ########################################################################################################### */
@@ -238,13 +210,18 @@ static void print_gpu_info(int gpu_id) {
 
 int main(int argc, char** argv) {
 
-  ParsedArgs args = parse_args(argc, argv); // verificare che gli argomenti da linea di comando siano corretti 
-  print_gpu_info(args.cfg.gpu_id);          // stampa le caratteristiche della GPU utilizzata
-
+  Config cfg = parse_args(argc, argv); // verificare che gli argomenti da linea di comando siano corretti 
+  print_gpu_info(cfg.gpu_id);          // stampa le caratteristiche della GPU utilizzata
+  
   try {
 
-    // chiama la funzione build database e stampa informazioni sulla quantità di dati processati
-      BuildStats st = database_deduplication(cfg);
+    /* chiama la funzione build database e stampa informazioni sulla quantità di dati processati
+    struct BuildStats {
+      uint64_t frames_total = 0;        // quanti frame abbiamo letto
+      uint64_t frames_after_dedup = 0;  // quanti frame ci sono rimasti dopo il dedup
+      uint64_t signatures_written = 0;  // quante firme hai salvato ( direi che deve essere uguale a frames_after_dedup)
+    }; */
+      BuildStats st = carica_db(cfg);
       std::cerr << "[BUILD DONE] frames_total=" << st.frames_total
                 << " frames_after_dedup=" << st.frames_after_dedup
                 << " signatures_written=" << st.signatures_written << "\n";
@@ -255,7 +232,7 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaDeviceSynchronize());
 
 
-    // chiama la funzione di ricerca del frame
+    // chiama la funzione di ricerca del frame (ancora non esiste ricerca_frame)
       QueryResult r = ricerca_frame(cfg);
       if (!r.found) {
         std::cerr << "[QUERY DONE] not found\n";
