@@ -9,7 +9,6 @@ struct DbSoAChunk {
   std::vector<uint64_t> hashes;        // hash64 del frame deduplicato
   std::vector<int32_t>  video_id;      // id del video nel DB originale
   std::vector<int32_t>  frame_id;      // id del frame nel DB originale
-  std::vector<uint64_t> offset_bytes;  // offset nel file binario del nuovo DB
 };
 
 // Chunk host con i frame grezzi + metadati (input della pipeline):

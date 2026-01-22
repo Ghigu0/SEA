@@ -4,6 +4,9 @@
 #include <stdexcept>
 #include <fstream>
 #include <algorithm>
+#include <filesystem>
+#include <string>
+
 
 // la struttura da leggere è la seguente: abbiamo una cartella che rappresenta il database, e, all'interno di tale
 // cartella sono presenti delle sottocartelle che rappresentano i vari video

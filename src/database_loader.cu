@@ -15,26 +15,59 @@
 #include "../include/raw_db_reader.h"
 #include "../include/workspace.h"
 #include "../include/compaction.cuh"
+#include "../include/new_db_writer.h"
 
 #include "./kernels_db/kernel_frame_deduplication.cuh"
 #include "./kernels_db/kernel_index_ahash.cuh"
 
-// ============================================================
-// Writer SoA (placeholder) - poi lo sposti in un file dedicato
-// ============================================================
-struct SoaWriter {
-  explicit SoaWriter(const Config&) {
-    // TODO: apri file/crea cartella/inizializza header
-  }
-  void write_chunk(const DbSoAChunk& out) {
-    // TODO: scrivi hashes + metadati su disco (SoA)
-    (void)out;
-  }
-};
 
-// ============================================================
-// Helpers pipeline
-// ============================================================
+static void workspace_init(Workspace& ws, const Config& cfg) {
+  ws.max_frames = cfg.chunk_frames;
+  ws.w = cfg.frame_w;
+  ws.h = cfg.frame_h;
+  ws.c = cfg.channels;
+  ws.bytes_per_frame = static_cast<size_t>(ws.w) * ws.h * ws.c;
+
+  // Device buffers
+  CUDA_CHECK(cudaMalloc(&ws.d_frames,   (size_t)ws.max_frames * ws.bytes_per_frame));
+  CUDA_CHECK(cudaMalloc(&ws.d_keep,     (size_t)ws.max_frames * sizeof(uint8_t)));
+  
+  CUDA_CHECK(cudaMalloc(&ws.d_kept_ids, (size_t)ws.max_frames * sizeof(int32_t)));
+  CUDA_CHECK(cudaMalloc(&ws.d_hashes,   (size_t)ws.max_frames * sizeof(uint64_t)));
+
+  // CUB compaction helpers
+  CUDA_CHECK(cudaMalloc(&ws.d_all_ids,    (size_t)ws.max_frames * sizeof(int32_t)));
+  CUDA_CHECK(cudaMalloc(&ws.d_kept_count, sizeof(int32_t)));
+
+  // temp per aHash (kept * 64)
+  CUDA_CHECK(cudaMalloc(&ws.d_cell_mean_u16, (size_t)ws.max_frames * 64u * sizeof(uint16_t)));
+
+  // Host pinned buffers (download veloce)
+  CUDA_CHECK(cudaMallocHost(&ws.h_hashes,   (size_t)ws.max_frames * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMallocHost(&ws.h_kept_ids, (size_t)ws.max_frames * sizeof(int32_t)));
+
+  // temp CUB (allocato "lazy" dentro run_compaction_cub di solito)
+  ws.d_temp = nullptr;
+  ws.d_temp_bytes = 0;
+}
+
+static void workspace_destroy(Workspace& ws) {
+  if (ws.d_temp)         cudaFree(ws.d_temp);
+  if (ws.d_cell_mean_u16)cudaFree(ws.d_cell_mean_u16);
+  if (ws.d_kept_count)   cudaFree(ws.d_kept_count);
+  if (ws.d_all_ids)      cudaFree(ws.d_all_ids);
+
+  if (ws.d_hashes)       cudaFree(ws.d_hashes);
+  if (ws.d_kept_ids)     cudaFree(ws.d_kept_ids);
+  if (ws.d_keep)         cudaFree(ws.d_keep);
+  if (ws.d_frames)       cudaFree(ws.d_frames);
+
+  if (ws.h_kept_ids)     cudaFreeHost(ws.h_kept_ids);
+  if (ws.h_hashes)       cudaFreeHost(ws.h_hashes);
+
+  ws = Workspace{};
+}
+
 
 static void upload_frames(Workspace& ws, const HostChunk& ch) {
   const size_t bytes = (size_t)ch.n * ws.bytes_per_frame;
@@ -120,7 +153,7 @@ BuildStats carica_db(const Config& cfg) {
   workspace_init(ws, cfg);
 
   RawDbReader reader(cfg);
-  SoaWriter writer(cfg);
+  NewDbWriter writer(cfg);
 
   BuildStats stats{};
 

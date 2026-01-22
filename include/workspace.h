@@ -16,7 +16,6 @@ struct Workspace {
     Ogni thread che ha d_keep[i] == 1 deve sapere:
     “In quale posizione dell’array compatto devo scrivere i?”
     d_pos risponde esattamente a questa domanda.*/
-  int32_t*  d_pos    = nullptr;     // [max_frames] (scan output / posizioni)
 
   int32_t*  d_kept_ids = nullptr;   // [max_frames] lista compatta degli indici da tenere,
                                    // ovvero se keep è [1, 0, 0, 1, 1] allora d_kept_ids sarà [0, 3, 4]
