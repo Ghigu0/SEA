@@ -13,7 +13,7 @@ struct Config {
     int frame_w = 1280;               // larghezza frame (es. 1280x720)
     int frame_h = 720;                // altezza frame
     int channels = 3;                 // 1=grayscale, 3=RGB
-    int chunk_frames = 2048;          // batch/chunk size
+    int chunk_frames = 128;          // batch/chunk size
 
     // Soglia dedup: dipende dal kernel (es. SAD). Va TARATA con test reali.
     // Default iniziale "ragionevole" per non essere né troppo permissivo né troppo rigido.
