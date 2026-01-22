@@ -2,24 +2,34 @@
 
 #include <stdexcept>
 #include <string>
+#include <filesystem>
+#include <system_error>
 
-// ======================================================================
-// METTI QUI I TUOI PATH COMPLETI (hardcoded) - UN SOLO PUNTO DA CAMBIARE
-// ======================================================================
-static constexpr const char* kHashesPath  = "./../../newDB/hashes.bin";
-static constexpr const char* kVideoIdPath = "./../../newDB/video_id.bin";
-static constexpr const char* kFrameIdPath = "./../../newDB/frame_id.bin";
-// ======================================================================
+namespace fs = std::filesystem;
 
 void NewDbWriter::must(bool ok, const char* msg) {
   if (!ok) throw std::runtime_error(std::string("NewDbWriter: ") + msg);
 }
 
-NewDbWriter::NewDbWriter(const Config& /*cfg*/) {
-  // Build “pulita”: trunc (riscrive da zero)
-  f_hash_.open(kHashesPath,  std::ios::binary | std::ios::out | std::ios::trunc);
-  f_vid_.open (kVideoIdPath, std::ios::binary | std::ios::out | std::ios::trunc);
-  f_fid_.open (kFrameIdPath, std::ios::binary | std::ios::out | std::ios::trunc);
+NewDbWriter::NewDbWriter(const Config& cfg) {
+  // Cartella output decisa nel main (es: "<working_dir>/newDB" o path assoluto)
+  fs::path out_dir = cfg.deduplicated_db_path.empty()
+      ? fs::path("newDB")
+      : fs::path(cfg.deduplicated_db_path);
+
+  // Crea la directory se non esiste (non errore se già esiste)
+  std::error_code ec;
+  fs::create_directories(out_dir, ec);
+  must(!ec, "cannot create output directory");
+
+  const fs::path hashes = out_dir / "hashes.bin";
+  const fs::path vid    = out_dir / "video_id.bin";
+  const fs::path fid    = out_dir / "frame_id.bin";
+
+  // TRUNC qui = svuota SOLO all'inizio run (costruttore chiamato una volta)
+  f_hash_.open(hashes, std::ios::binary | std::ios::out | std::ios::trunc);
+  f_vid_.open (vid,    std::ios::binary | std::ios::out | std::ios::trunc);
+  f_fid_.open (fid,    std::ios::binary | std::ios::out | std::ios::trunc);
 
   must((bool)f_hash_, "cannot open hashes.bin");
   must((bool)f_vid_,  "cannot open video_id.bin");
@@ -39,7 +49,6 @@ void NewDbWriter::write_chunk(const DbSoAChunk& out) {
   }
   if (n == 0) return;
 
-  // Scrittura SoA contigua
   f_hash_.write(reinterpret_cast<const char*>(out.hashes.data()),
                 (std::streamsize)(n * sizeof(uint64_t)));
   must((bool)f_hash_, "write failed on hashes.bin");

@@ -9,6 +9,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <filesystem>
+
 
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
@@ -67,8 +69,12 @@ static Config parse_args(int argc, char** argv) {
   }
 
   cfg.full_db_path         = argv[1];
-  cfg.deduplicated_db_path = argv[2];
-  cfg.query_frame_path     = argv[3];
+  cfg.query_frame_path     = argv[2];
+  std::filesystem::path exe = std::filesystem::current_path();
+  std::filesystem::path out = exe / "newDB";
+  cfg.deduplicated_db_path = out.string();
+  std::filesystem::create_directories(out);
+  
 
   for (int i = 4; i < argc; ++i) {
     std::string a = argv[i];
