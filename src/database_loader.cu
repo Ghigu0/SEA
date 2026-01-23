@@ -8,6 +8,8 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <cstring>   
+
 
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
@@ -132,14 +134,24 @@ static DbSoAChunk build_soa_chunk_from_results(const HostChunk& in, const Worksp
   out.hashes.resize(kept);
   out.video_id.resize(kept);
   out.frame_id.resize(kept);
-  // offset_bytes: lo riempi quando implementi davvero il writer binario (se ti serve)
+
+  out.bytes_per_frame = (int)ws.bytes_per_frame;
+  out.frames_raw.resize((size_t)kept * ws.bytes_per_frame);
 
   for (int j = 0; j < kept; ++j) {
     const int32_t i = ws.h_kept_ids[j]; // indice nel chunk originale
+
+    // Metadati + hash
     out.hashes[j]   = ws.h_hashes[j];
     out.video_id[j] = in.video_id[i];
     out.frame_id[j] = in.frame_id[i];
+
+    // Copia frame RAW: src = frame i nel chunk, dst = frame j nel DB nuovo
+    const uint8_t* src = in.frames.data() + (size_t)i * ws.bytes_per_frame;
+    uint8_t*       dst = out.frames_raw.data() + (size_t)j * ws.bytes_per_frame;
+    std::memcpy(dst, src, ws.bytes_per_frame);
   }
+
   return out;
 }
 
@@ -180,12 +192,28 @@ BuildStats carica_db(const Config& cfg) {
       run_index(ws, kept);
       stats.signatures_written += (uint64_t)kept;
 
+      
+        std::cout << "chunk n=" << ch.n << " kept=" << kept << "\n";
+      
       download_results(ws, kept);
 
       // qui serve una sync perché usiamo ws.h_* su CPU
       CUDA_CHECK(cudaDeviceSynchronize());
 
       DbSoAChunk out = build_soa_chunk_from_results(ch, ws, kept);
+
+
+      //
+      int min_vid = ch.video_id.empty() ? -1 : ch.video_id[0];
+int max_vid = min_vid;
+for (int i = 0; i < ch.n; ++i) {
+  min_vid = std::min(min_vid, ch.video_id[i]);
+  max_vid = std::max(max_vid, ch.video_id[i]);
+}
+std::cout << "chunk n=" << ch.n << " video_id range [" << min_vid << "," << max_vid << "]\n";
+//
+
+      
       writer.write_chunk(out);
     }
   } catch (...) {

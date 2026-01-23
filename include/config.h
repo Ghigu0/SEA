@@ -17,7 +17,9 @@ struct Config {
 
     // Soglia dedup: dipende dal kernel (es. SAD). Va TARATA con test reali.
     // Default iniziale "ragionevole" per non essere né troppo permissivo né troppo rigido.
-    int dedup_threshold = 10000;
+
+    //giochiamo intorno a questo valore qua, per ora nei 2 video uguale, salva circa la metà  
+    int dedup_threshold = 33000;
 
     // Parametri per la seconda fase (ricerca del frame)
     std::string query_frame_path;     // path del frame da cercare
