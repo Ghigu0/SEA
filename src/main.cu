@@ -43,7 +43,6 @@ static void print_usage(const char* prog) {
       << "Options:\n"
       << "  --gpu <id>          GPU id (default 0)\n"
       << "  --verbose           Logging verboso\n"
-      << "  --no-index          Disabilita utilizzo indici (fase query)\n"
       << "  --topk <k>          Numero candidati per template matching (fase query)\n"
       << "  --no-template       Disabilita template matching (fase query)\n";
 }
@@ -87,8 +86,6 @@ static Config parse_args(int argc, char** argv) {
       cfg.gpu_id = to_int_or_die(argv[i], "--gpu");
     } else if (is_flag(a, "--verbose")) {
       cfg.verbose = true;
-    } else if (is_flag(a, "--no-index")) {
-      cfg.enable_index_match = false;
     } else if (is_flag(a, "--topk")) {
       if (++i >= argc) { std::cerr << "--topk needs a value\n"; std::exit(2); }
       cfg.topk = to_int_or_die(argv[i], "--topk");
