@@ -19,13 +19,62 @@
 #include "../src/kernel_research/kernel_hist_hamming.cuh"
 #include "../include/research_types.h"
 #include "../src/kernel_research/kernel_collect_candidates.cuh"
+#include "../include/frame_reader.h"
+#include "../src/kernel_research/kernel_query_ahash.cuh"
 
 // =============================================================================================
 // chiamata kernel per calcolare l'hash dell'immagine da ricercare 
-static uint64_t compute_query_hash64_stub(const std::string& /*imgPath*/) {
-  // TODO: carica immagine, riduci a 8x8/16x16 e calcola aHash come avete fatto in build
-  return 0ULL;
+  static uint64_t compute_query_hash64(const std::string& imgPath, const Config& cfg) {
+  //frameReader è un oggetto che permette di leggere un frame
+  FrameReader fr(cfg.frame_w, cfg.frame_h, cfg.channels);
+  std::vector<uint8_t> h_frame = fr.read_raw_frame(imgPath);
+  //dimensione del frame
+  const int bpf = fr.bytes_per_frame();
+
+  // allocazioni su GPU ( frame, cella 8x8 e il risultato)
+  uint8_t*  d_frame  = nullptr;   // RAW frame query
+  uint16_t* d_cells  = nullptr;   // 64 mean (8x8)
+  uint64_t* d_hash   = nullptr;   // 1 hash64
+
+  CUDA_CHECK(cudaMalloc(&d_frame, (size_t)bpf));
+  CUDA_CHECK(cudaMalloc(&d_cells, 64u * sizeof(uint16_t)));
+  CUDA_CHECK(cudaMalloc(&d_hash,  sizeof(uint64_t)));
+
+  // caricamento frame in GPU
+  CUDA_CHECK(cudaMemcpy(d_frame, h_frame.data(), (size_t)bpf, cudaMemcpyHostToDevice));
+
+  dim3 block1(256, 1, 1);
+  dim3 grid1(64, 1, 1);
+  dim3 block2(1, 1, 1);
+  dim3 grid2(1, 1, 1);
+
+  // produce i 64 valori
+  k_query_cellmean_u16_8x8<<<grid1, block1>>>(
+      d_frame,
+      cfg.frame_w, cfg.frame_h, cfg.channels,
+      bpf,
+      d_cells
+  );
+  CUDA_CHECK(cudaGetLastError());
+  // calcola la media globale e produce l'hash
+  k_query_ahash64_from_cellmean<<<grid2, block2>>>(
+      d_cells,
+      d_hash
+  );
+  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  //passo il risultato alla CPU
+  uint64_t h_hash = 0;
+  CUDA_CHECK(cudaMemcpy(&h_hash, d_hash, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+  // clenaup
+  CUDA_CHECK(cudaFree(d_hash));
+  CUDA_CHECK(cudaFree(d_cells));
+  CUDA_CHECK(cudaFree(d_frame));
+
+  return h_hash;
 }
+
 
 //===============================================================================
 // per l'individuazione della soglia minima ( guardare commento nel main )
@@ -69,16 +118,14 @@ QueryResult ricerca_frame(const Config& cfg) {
   //controlla che i contenuti (principlamente numero di byte) dei file binari siano coerenti tra di loro
   db.validate(true, cfg.enable_template_match);
 
-  //=======================================================================
-  // calcolo l'hash del frame che carica l'utente 
-  const uint64_t qhash = compute_query_hash64_stub(cfg.query_frame_path);
-  //======================================================================
-  
+  // KERNEL 
+  // calcolo l'hash del frame che carica l'utente ( questa funzione chiama poi 2 KERNEL )
+  const uint64_t qhash = compute_query_hash64(cfg.query_frame_path, cfg);
+
   // ci permette di usare db.hashes che contiene gli hash dei frame "sopravvisuti" dopo la fram dedup
   db.load_hashes();
   // in modo analogo possiamo usare db.video_id() e db.frame_id()
   db.load_meta();
-
 
   // N rappresenta il numero di frame presenti nel databse (contanto il numeo di hash di 64 bit presenti nel vettore db.hashes)
   const int N = static_cast<int>(db.hashes().size());
@@ -88,9 +135,7 @@ QueryResult ricerca_frame(const Config& cfg) {
     return res;
   }
   if (cfg.verbose) {
-    std::cerr << "[QUERY] N=" << N
-              << " topk=" << cfg.topk
-              << "\n";
+    std::cerr << "[QUERY] N=" << N << " topk=" << cfg.topk << "\n";
   }
 
   /* copio gli hash in memoria GPU ( non ci si pongono problemi di spazio, un hash ha dimensione di un byte)
@@ -108,22 +153,15 @@ QueryResult ricerca_frame(const Config& cfg) {
   CUDA_CHECK(cudaMalloc(&d_hist, 65 * sizeof(uint32_t)));
   CUDA_CHECK(cudaMemset(d_hist, 0, 65 * sizeof(uint32_t)));
 
-  //===================================================================
   //kernel dell'istogramma 
   const int block = 256;
-  int grid = 0;
-  {
-    int sm = 0;
-    CUDA_CHECK(cudaDeviceGetAttribute(&sm, cudaDevAttrMultiProcessorCount, cfg.gpu_id));
-    grid = sm * 8;
-    if (grid < 1) grid = 1;
-  }
+  int grid = (N + block - 1) / block;
+  if (grid > 120) grid = 120;
+  if (grid < 1)   grid = 1;
   kernel_hist_hamming<<<grid, block>>>(d_hashes, N, qhash, d_hist);
   CUDA_CHECK(cudaGetLastError());
   CUDA_CHECK(cudaDeviceSynchronize());
-  // fine kernel istogramma 
-  //================================================================================
-
+  
   // riporto l'istogramma dalla GPU alla CPU
   uint32_t h_hist[65];
   CUDA_CHECK(cudaMemcpy(h_hist, d_hist, 65 * sizeof(uint32_t), cudaMemcpyDeviceToHost));
@@ -176,75 +214,18 @@ QueryResult ricerca_frame(const Config& cfg) {
   CUDA_CHECK(cudaFree(d_hist));
   CUDA_CHECK(cudaFree(d_hashes));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  // ---- 6) pick best (min dist; tie-break: primo)
+  //se non ho trovato candidati
   if (h_count == 0) {
-    res.found = false;
+    res.found = false; // non troveremo un risultato ( non abbiamo con chi fare template matching)
   } else {
-    auto best_it = std::min_element(h_cands.begin(), h_cands.end(),
-      [](const Cand& a, const Cand& b) { return a.dist < b.dist; });
 
-    const int best_idx = best_it->idx;
-    const uint8_t best_dist = best_it->dist;
+  // ordiniamo i candidati, in modo da partire dal più "promettente "
+  std::sort(h_cands.begin(), h_cands.end(),[](const Cand& a, const Cand& b){ return a.dist < b.dist; });
 
-    res.found = true;
-    res.best_db_index = best_idx;
-    res.video_id = db.video_id()[best_idx];
-    res.frame_id = db.frame_id()[best_idx];
-    res.score = (float)best_dist;
-
-    // =====================================================================================
-    // ---- 7) Template matching (NUOVO FLUSSO SENZA offset_bytes.bin)
-    //
-    // Ora gli offset non servono perché:
-    //   offset = idx * bytes_per_frame
-    //
-    // Il reader ti fornisce direttamente read_frame(idx, ...)
-    // =====================================================================================
-    if (cfg.enable_template_match) {
-      const int bpf = db.bytes_per_frame();
-
-      // TODO: qui devi decidere come caricare la query frame in RAW (RGB24).
-      // Per ora questa funzione legge "bytes" da file; se la query è PNG, non va bene.
-      // Quando colleghi stb_image/opencv, qui avrai query_raw di size = bpf.
-      // std::vector<uint8_t> query_raw = load_query_as_rgb24(cfg.query_frame_path, cfg.frame_w, cfg.frame_h);
-      std::vector<uint8_t> query_raw;
-      (void)bpf;
-
-      // Apri il file dei frame una volta sola
-      db.open_frames();
-
-      // Buffer host per un candidato (riusato)
-      std::vector<uint8_t> cand_raw((size_t)bpf);
-
-      // Esempio: per ora NON facciamo TM vero. Ti lascio l’hook pronto:
-      // - per ogni candidato: leggi frame dal newDB con idx
-      // - poi fai matching su GPU/CPU e scegli best
-      //
-      // for (const auto& c : h_cands) {
-      //   db.read_frame((size_t)c.idx, cand_raw.data(), cand_raw.size());
-      //   // upload cand_raw + query_raw su GPU e calcola score (SAD/NCC)
-      //   // aggiorna best
-      // }
-
-      db.close_frames();
-    }
   }
+    
+  // vedi ultima risposta chat gpt 
+
 
  
   return res;
