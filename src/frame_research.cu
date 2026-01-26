@@ -87,25 +87,6 @@ static uint8_t choose_threshold_for_topk(const uint32_t hist[65], int topk) {
   return 64;
 }
 
-// =============================================================================================
-// Helper: carica un file intero (per query frame RAW già in rgb24 sul disco).
-// Se la query è PNG/JPG, userai un loader immagini (stb_image / opencv / ffmpeg).
-static std::vector<uint8_t> read_file_bytes(const std::string& path) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("Cannot open file: " + path);
-  f.seekg(0, std::ios::end);
-  std::streamoff sz = f.tellg();
-  if (sz < 0) throw std::runtime_error("tellg failed: " + path);
-  std::vector<uint8_t> data((size_t)sz);
-  f.seekg(0, std::ios::beg);
-  if (sz > 0) {
-    f.read(reinterpret_cast<char*>(data.data()), sz);
-    if (!f) throw std::runtime_error("Read failed: " + path);
-  }
-  return data;
-}
-
-
 
 
 

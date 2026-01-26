@@ -12,7 +12,7 @@
 #include <filesystem>
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
-#include "../include/database_loader.cuh"
+#include "../include/database_loader.h"
 #include "../include/research_types.h"
 #include "../include/frame_research.h"
 #include "../include/I_O/winner_frame.h"

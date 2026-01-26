@@ -2,12 +2,40 @@
 #include <stdexcept>
 #include <string>
 #include <filesystem>
+#include "../../include/config.h"          // NEW: serve per leggere i campi di Config
 #include "../../include/I_O/new_db_reader.h"
 
 namespace fs = std::filesystem;
 
 // ======================================================================
 // I path NON sono più hardcoded: vengono costruiti dal Config
+// ======================================================================
+
+
+// ======================================================================
+// NEW: COSTRUTTORE MANCANTE (era la causa del "riferimento non definito")
+// ======================================================================
+SoADbReader::SoADbReader(const Config& cfg) {                     // NEW
+  // Base folder: cartella che contiene i 4 file del DB snellito          // NEW
+  // Nel tuo progetto è tipicamente cfg.deduplicated_db_path              // NEW
+  fs::path base = fs::path(cfg.deduplicated_db_path);             // NEW
+
+  // Costruisco i path dei file SoA                                      // NEW
+  hashes_path_   = (base / "hashes.bin").string();                 // NEW
+  video_id_path_ = (base / "video_id.bin").string();               // NEW
+  frame_id_path_ = (base / "frame_id.bin").string();               // NEW
+  frames_path_   = (base / "raw_frame.bin").string();              // NEW
+
+  // bytes_per_frame dipende dal formato dei frame                        // NEW
+  // ⚠️ Se nel tuo Config i nomi NON sono frame_w/frame_h/channels         // NEW
+  // (es. w,h,c), cambia qui con i tuoi campi reali.                       // NEW
+  bytes_per_frame_ = cfg.frame_w * cfg.frame_h * cfg.channels;     // NEW
+
+  if (bytes_per_frame_ <= 0) {                                     // NEW
+    throw std::runtime_error(                                      // NEW
+        "SoADbReader: invalid bytes_per_frame (check cfg frame sizes)"); // NEW
+  }                                                                // NEW
+}
 // ======================================================================
 
 
