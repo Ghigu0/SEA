@@ -14,14 +14,14 @@
 
 #include "../include/cuda_utils.h"
 #include "../include/config.h"
-#include "../include/frame_research.cuh"
-#include "../include/new_db_reader.cuh"  
-#include "../src/kernel_research/kernel_hist_hamming.cuh"
+#include "../include/frame_research.h"
 #include "../include/research_types.h"
-#include "../src/kernel_research/kernel_collect_candidates.cuh"
-#include "../include/frame_reader.h"
-#include "../src/kernel_research/kernel_query_ahash.cuh"
-
+#include "../include/I_O/frame_reader.h"
+#include "../include/I_O/new_db_reader.h"  
+#include "../src/kernel_research/headers/kernel_query_ahash.cuh"
+#include "../src/kernel_research/headers/kernel_template_sad_batch.cuh"
+#include "../src/kernel_research/headers/kernel_hist_hamming.cuh"
+#include "../src/kernel_research/headers/kernel_collect_candidates.cuh"
 // =============================================================================================
 // chiamata kernel per calcolare l'hash dell'immagine da ricercare 
   static uint64_t compute_query_hash64(const std::string& imgPath, const Config& cfg) {
@@ -217,16 +217,129 @@ QueryResult ricerca_frame(const Config& cfg) {
   //se non ho trovato candidati
   if (h_count == 0) {
     res.found = false; // non troveremo un risultato ( non abbiamo con chi fare template matching)
+    return res;
   } else {
 
-  // ordiniamo i candidati, in modo da partire dal più "promettente "
-  std::sort(h_cands.begin(), h_cands.end(),[](const Cand& a, const Cand& b){ return a.dist < b.dist; });
+    // ordiniamo i candidati, in modo da partire dal più "promettente "
+    std::sort(h_cands.begin(), h_cands.end(), [](const Cand& a, const Cand& b){ return a.dist < b.dist; });
+    // carico il frame dell'utente che useremo per fare template matching
+    FrameReader fr(cfg.frame_w, cfg.frame_h, cfg.channels);
+    std::vector<uint8_t> query_raw = fr.read_raw_frame(cfg.query_frame_path);
+    //controllo sulla dimensione del frame caricato 
+    const int bpf = fr.bytes_per_frame();
+    if ((int)query_raw.size() != bpf) {
+      throw std::runtime_error("[QUERY] query_raw size mismatch: expected bpf bytes");
+    }
 
+    // apro il file binario che contiene tutti i frame
+    db.open_frames();
+
+    // in base a quanti frame avremo, potrebbero non starci tutti nella GPU, quindi effettueremo un ciclo
+    // per eseguire template matching su un insieme di frame alla volta 
+    const int BATCH = 64; // numero di frame analizzati per kernel
+    const int total = h_count; // numero di frame totali da analizzare 
+    uint8_t best_dist = 255;
+    //creiamo un vettore che sia in grado di tenere tutti i frame di un batch
+    std::vector<uint8_t> batch_host((size_t)BATCH * (size_t)bpf);
+
+    //buffer per la GPU 
+    uint8_t* d_query = nullptr; // contiene il frame dell'utente
+    uint8_t* d_batch = nullptr; // contiene un batch di frame candidati
+    uint32_t* d_scores = nullptr; // contiene gli score per matching per ogni frame 
+
+    CUDA_CHECK(cudaMalloc(&d_query, (size_t)bpf));
+    CUDA_CHECK(cudaMemcpy(d_query, query_raw.data(), (size_t)bpf, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(&d_batch, (size_t)BATCH * (size_t)bpf));
+    CUDA_CHECK(cudaMalloc(&d_scores, (size_t)BATCH * sizeof(uint32_t)));
+
+    //variabili che serviranno per salvare le info del frame migliore scegliamo lo score minimo: SAD più basso = più simile)
+   
+    // best_score sarà la variabile che conterrà il risultato migliore ( quello con sad minore). Il primo frame produrrà un sad che 
+    // dovremmo prendere per forza ( non abbiamo nessuno a cui paragonarlo), quindi solo per il primo confronto quel sad verrà paragonato con un 
+    // valore per forza più grande 
+    uint32_t best_score = std::numeric_limits<uint32_t>::max(); // inizializza lo score migliore al valore peggiore possibile 
+    // indice nel new_DB del frame migliore 
+    int best_idx = -1;    
+   
+    // ciclo sui batch di frame
+    for (int base = 0; base < total; base += BATCH) {
+      // serve per contare il numero di frame da processare ( serve per l'ultima iterazione praticamente) 
+      const int count = std::min(BATCH, total - base);
+
+      // leggiamo dal file binario frame.bin i frame dei candidati del batch
+      for (int i = 0; i < count; ++i) {
+        // ovviamente non leggiamo tutti i frame del file binario, ma solo i frame che hanno passato la selezione dai confronti dell'index
+        const int cand_idx = h_cands[base + i].idx; 
+        // read_frame permette di leggere uno specifico frame SENZA scorrere il file binario. Conoscendo l'offset
+        // è in grado di leggere direttamente il frame  
+        db.read_frame((size_t)cand_idx, batch_host.data() + (size_t)i * (size_t)bpf, (size_t)bpf);
+      }
+
+      //copiamo batch su GPU
+      CUDA_CHECK(cudaMemcpy(d_batch, batch_host.data(), (size_t)count * (size_t)bpf, cudaMemcpyHostToDevice));
+
+      // 3) lanciamo il kernel di template matching sul batch
+      // ====== FIRMA ATTESA (adatta al tuo kernel reale) ======
+      // kernel_template_sad_batch(d_query, d_batch, bpf, count, d_scores);
+      //
+      // dove:
+      // - d_query: frame query (bpf bytes)
+      // - d_batch: count frame consecutivi (count*bpf bytes)
+      // - bpf: bytes per frame
+      // - count: numero di frame nel batch
+      // - d_scores: array di "count" score (es. SAD)
+      //
+      // Esempio launch:
+      dim3 blk(256);
+      dim3 grd(count);  // 1 block-group per frame (scelta semplice; il kernel poi parallelizza sui pixel)
+      kernel_template_sad_batch<<<grd, blk>>>(d_query, d_batch, bpf, count, d_scores);
+      CUDA_CHECK(cudaGetLastError());
+      CUDA_CHECK(cudaDeviceSynchronize());
+
+      // riportiamo i risultati sull'host e aggiorniamo lo score migliore 
+      std::vector<uint32_t> scores((size_t)count);
+      CUDA_CHECK(cudaMemcpy(scores.data(), d_scores, (size_t)count * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+      //analisi  dei risultati
+      for (int i = 0; i < count; ++i) {
+        const uint32_t s = scores[i];
+        const Cand& c = h_cands[base + i];
+        if (s < best_score) {
+          best_score = s;
+          best_idx = c.idx;
+          best_dist = c.dist;
+        }
+      }
+    }
+
+    // ---- cleanup TM
+    CUDA_CHECK(cudaFree(d_scores));
+    CUDA_CHECK(cudaFree(d_batch));
+    CUDA_CHECK(cudaFree(d_query));
+
+    db.close_frames();
+
+    // se non ho trovato nessuno 
+    if (best_idx < 0) {
+      res.found = false;
+      return res;
+    }
+    res.found = true;
+    res.best_db_index = best_idx;
+    res.video_id = db.video_id()[best_idx];
+    res.frame_id = db.frame_id()[best_idx];
+
+    // qui decidi cosa vuoi come "score":
+    // - se è SAD: più basso = meglio
+    // - puoi anche salvarci best_dist in un campo separato se ti serve
+    res.score = (float)best_score;
+    if (cfg.verbose) {
+      std::cerr << "[QUERY] Best after TM: idx=" << best_idx
+                << " video_id=" << res.video_id
+                << " frame_id=" << res.frame_id
+                << " dist=" << (int)best_dist
+                << " tm_score=" << best_score << "\n";
+    }
   }
-    
-  // vedi ultima risposta chat gpt 
 
-
- 
   return res;
 }

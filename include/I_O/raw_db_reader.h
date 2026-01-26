@@ -4,8 +4,8 @@
 #include <vector>
 #include <filesystem>
 
-#include "config.h"
-#include "db_types.h"
+#include "../config.h"
+#include "../db_types.h"
 
 struct RawDbReader {
   explicit RawDbReader(const Config& cfg);

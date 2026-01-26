@@ -1,9 +1,8 @@
-#include "../../include/new_db_reader.cuh"
-
 #include <fstream>
 #include <stdexcept>
 #include <string>
 #include <filesystem>
+#include "../../include/I_O/new_db_reader.h"
 
 namespace fs = std::filesystem;
 

@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #include "../../include/cuda_utils.h"
-#include "../kernels_db/kernel_index_ahash.cuh"
+#include "./headers/kernel_index_ahash.cuh"
 
 // =======================
 // Utils device

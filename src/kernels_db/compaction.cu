@@ -2,7 +2,7 @@
 #include <cub/cub.cuh>
 #include <cstdint>
 #include "../../include/cuda_utils.h"
-#include "../../include/compaction.cuh"
+#include "./headers/compaction.cuh"
 #include "../../include/workspace.h"
 
 __global__ void iota_kernel(int32_t* out, int n) {

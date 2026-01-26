@@ -2,8 +2,8 @@
 #include <cstdint>
 #include <fstream>
 
-#include "../include/config.h"
-#include "../include/db_types.h"
+#include "../config.h"
+#include "../db_types.h"
 
 // Writer DB snellito in formato SoA su 3 file binari.
 class NewDbWriter {

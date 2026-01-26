@@ -1,4 +1,4 @@
-#include "kernel_query_ahash.cuh"
+#include "./headers/kernel_query_ahash.cuh"
 #include <cuda_runtime.h>
 #include <cstdint>
 

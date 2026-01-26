@@ -1,4 +1,4 @@
-#include "./kernel_frame_deduplication.cuh"
+#include "./headers/kernel_frame_deduplication.cuh"
 #include <cstdint>
 
 

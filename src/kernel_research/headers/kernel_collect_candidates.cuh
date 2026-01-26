@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-#include "../../include/research_types.h"
+#include "../../../include/research_types.h"
 
 // ============================================================================
 // Kernel: collect candidates

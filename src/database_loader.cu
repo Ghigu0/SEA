@@ -9,18 +9,16 @@
 #include <string>
 #include <iostream>
 #include <cstring>   
-
-
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
 #include "../include/db_types.h"
-#include "../include/raw_db_reader.h"
 #include "../include/workspace.h"
-#include "../include/compaction.cuh"
-#include "../include/new_db_writer.h"
-
-#include "./kernels_db/kernel_frame_deduplication.cuh"
-#include "./kernels_db/kernel_index_ahash.cuh"
+#include "../include/database_loader.h"
+#include "../include/I_O/raw_db_reader.h"
+#include "../include/I_O/new_db_writer.h"
+#include "./kernels_db/headers/compaction.cuh"
+#include "./kernels_db/headers/kernel_frame_deduplication.cuh"
+#include "./kernels_db/headers/kernel_index_ahash.cuh"
 
 
 static void workspace_init(Workspace& ws, const Config& cfg) {

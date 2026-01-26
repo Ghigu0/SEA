@@ -1,5 +1,5 @@
-#include "kernel_collect_candidates.cuh"
-#include "kernel_query_utils.cuh"   // per popc64
+#include "./headers/kernel_collect_candidates.cuh"
+#include "./headers/kernel_query_utils.cuh"   // per popc64
 
 /* inclusa dagli headers
 struct Cand {

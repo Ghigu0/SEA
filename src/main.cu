@@ -10,11 +10,12 @@
 #include <string>
 #include <vector>
 #include <filesystem>
-
-
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
-#include "../include/database_loader.cuh" // BuildStats carica_db(const Config&);
+#include "../include/database_loader.cuh"
+#include "../include/research_types.h"
+#include "../include/frame_research.h"
+#include "../include/I_O/winner_frame.h"
 
 // ------------------------------------------------------------
 // Timer RAII (debug)
@@ -147,8 +148,12 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // TODO: quando implementi la fase query, chiamala qui.
-    // QueryResult r = ricerca_frame(cfg);
+    QueryResult r = ricerca_frame(cfg);
 
+    // salvo il frame vincitore 
+    dump_winner_frame_ppm(cfg, r, "winner.ppm");
+    std::cout << "Saved winner.ppm\n";
+    
   } catch (const std::exception& e) {
     std::cerr << "[FATAL] Exception: " << e.what() << "\n";
     return 1;

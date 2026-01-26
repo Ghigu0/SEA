@@ -1,5 +1,5 @@
-#include "kernel_hist_hamming.cuh"
-#include "kernel_query_utils.cuh"
+#include "./headers/kernel_hist_hamming.cuh"
+#include "./headers/kernel_query_utils.cuh"
 #include <cuda_runtime.h>
 #include <cstdint>
 
