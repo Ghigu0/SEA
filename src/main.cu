@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
 #include "../include/database_loader.h"
@@ -40,7 +41,9 @@ struct ScopedTimer {
 static void print_usage(const char* prog) {
   std::cout
       << "Usage:\n"
-      << "  " << prog << " <full-db_PATH> <dedup-db_PATH> <frame_PATH>\n"
+      << "  " << prog << " <full-db_PATH> <frame_PATH> [options]\n"
+      << "Notes:\n"
+      << "  The deduplicated DB will be written to: ./newDB (relative to current working directory)\n"
       << "Options:\n"
       << "  --gpu <id>          GPU id (default 0)\n"
       << "  --verbose           Logging verboso\n"
@@ -63,20 +66,23 @@ static int to_int_or_die(const std::string& s, const char* what) {
 static Config parse_args(int argc, char** argv) {
   Config cfg;
 
-  if (argc < 4) {
+  // two positional args: full db path + frame path
+  if (argc < 3) {
     print_usage(argv[0]);
     std::exit(0);
   }
 
-  cfg.full_db_path         = argv[1];
-  cfg.query_frame_path     = argv[2];
+  cfg.full_db_path     = argv[1];
+  cfg.query_frame_path = argv[2];
+
+  // default output for deduplicated db: ./newDB (cwd)
   std::filesystem::path exe = std::filesystem::current_path();
   std::filesystem::path out = exe / "newDB";
   cfg.deduplicated_db_path = out.string();
   std::filesystem::create_directories(out);
-  
 
-  for (int i = 4; i < argc; ++i) {
+  // options start from argv[3]
+  for (int i = 3; i < argc; ++i) {
     std::string a = argv[i];
 
     if (is_flag(a, "--help") || is_flag(a, "-h")) {
@@ -135,30 +141,42 @@ int main(int argc, char** argv) {
   Config cfg = parse_args(argc, argv);
   print_gpu_info(cfg.gpu_id);
 
+  // opzionale ma utile per chiarezza a runtime
+  if (cfg.verbose) {
+    std::cerr << "[CFG] full_db_path=" << cfg.full_db_path << "\n";
+    std::cerr << "[CFG] query_frame_path=" << cfg.query_frame_path << "\n";
+    std::cerr << "[CFG] deduplicated_db_path=" << cfg.deduplicated_db_path << "\n";
+    std::cerr << "[CFG] topk=" << cfg.topk
+              << " template_match=" << (cfg.enable_template_match ? "on" : "off") << "\n";
+  }
+
   try {
     {
       ScopedTimer t("carica_db");
       BuildStats st = carica_db(cfg);
+
+      // Se vuoi che il timer includa davvero il lavoro GPU, sincronizza qui:
+      CUDA_CHECK(cudaDeviceSynchronize());
+
       std::cerr << "[BUILD DONE] frames_total=" << st.frames_total
                 << " frames_after_dedup=" << st.frames_after_dedup
                 << " signatures_written=" << st.signatures_written << "\n";
     }
 
-    // Se un domani aggiungi la query, qui sei sicuro che la build sia finita:
-    CUDA_CHECK(cudaDeviceSynchronize());
-
     // TODO: quando implementi la fase query, chiamala qui.
     QueryResult r = ricerca_frame(cfg);
 
-    // salvo il frame vincitore 
+    // se ricerca_frame lancia kernel, questa sync aiuta a beccare errori e garantisce completion
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // salvo il frame vincitore
     dump_winner_frame_ppm(cfg, r, "winner.ppm");
     std::cout << "Saved winner.ppm\n";
-    
+
   } catch (const std::exception& e) {
     std::cerr << "[FATAL] Exception: " << e.what() << "\n";
     return 1;
   }
 
-  CUDA_CHECK(cudaDeviceSynchronize());
   return 0;
 }
