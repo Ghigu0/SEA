@@ -165,17 +165,17 @@ static void verbose_print_chunk_info(const Config& cfg, int chunk_idx, const Hos
   std::sort(vids.begin(), vids.end());
   vids.erase(std::unique(vids.begin(), vids.end()), vids.end());
 
-  std::cerr << "[CHUNK " << chunk_idx << "] "
+  std::cout << "[CHUNK " << chunk_idx << "] "
             << "n=" << ch.n
             << " kept=" << kept
             << " videos={";
 
   for (size_t i = 0; i < vids.size(); ++i) {
     if (i) std::cerr << ",";
-    std::cerr << vids[i];
+    std::cout << vids[i];
   }
 
-  std::cerr << "}\n";
+  std::cout << "}\n";
 }
 
 

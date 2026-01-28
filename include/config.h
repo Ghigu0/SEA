@@ -17,7 +17,7 @@ struct Config {
 
    
     //giochiamo intorno a questo valore qua, per ora nei 2 video uguale, salva circa la metà  
-    int dedup_threshold = 30000;
+    int dedup_threshold = 8000;
 
     // path del frame da cercare
     std::string query_frame_path;     

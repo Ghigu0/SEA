@@ -25,13 +25,12 @@ struct ScopedTimer {
   std::string name;
   std::chrono::high_resolution_clock::time_point t0;
 
-  explicit ScopedTimer(std::string n)
-      : name(std::move(n)), t0(std::chrono::high_resolution_clock::now()) {}
+  explicit ScopedTimer(std::string n): name(std::move(n)), t0(std::chrono::high_resolution_clock::now()) {}
 
   ~ScopedTimer() {
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    std::cerr << "[TIMER] " << name << ": " << ms << " ms\n";
+    std::cout << "[TIMER] " << name << ": " << ms << " ms\n";
   }
 };
 
@@ -143,6 +142,8 @@ static void print_gpu_info(int gpu_id) {
 // main
 // ------------------------------------------------------------
 int main(int argc, char** argv) {
+
+  ScopedTimer total("total_time_program: ");
   Config cfg = parse_args(argc, argv);
  
   // opzionale ma utile per chiarezza a runtime
@@ -159,15 +160,16 @@ int main(int argc, char** argv) {
 
   try {
     {
-      ScopedTimer t("carica_db");
+      
       BuildStats st = carica_db(cfg);
 
       // Se vuoi che il timer includa davvero il lavoro GPU, sincronizza qui:
       CUDA_CHECK(cudaDeviceSynchronize());
-
-      std::cerr << "\n[BUILD DONE] frames_total=" << st.frames_total
+      if (cfg.verbose){
+      std::cout << "\n[BUILD DONE] frames_total=" << st.frames_total
                 << " frames_after_dedup=" << st.frames_after_dedup
                 << " signatures_written=" << st.signatures_written << "\n";
+      }
     }
 
     // TODO: quando implementi la fase query, chiamala qui.
