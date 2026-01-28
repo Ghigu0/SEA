@@ -45,10 +45,10 @@ static void print_usage(const char* prog) {
       << "Notes:\n"
       << "  The deduplicated DB will be written to: ./newDB (relative to current working directory)\n"
       << "Options:\n"
-      << "  --gpu <id>          GPU id (default 0)\n"
-      << "  --verbose           Logging verboso\n"
-      << "  --topk <k>          Numero candidati per template matching (fase query)\n"
-      << "  --no-template       Disabilita template matching (fase query)\n";
+      << "  --gpu <id>              GPU id (default 0)\n"
+      << "  --verbose               Logging verboso\n"
+      << "  --topk <k>              Numero candidati per template matching (fase query)\n"
+      << "  --dedup-threshold <t>   SAD threshold for frame deduplication (fase build)\n";
 }
 
 static bool is_flag(const std::string& s, const char* f) { return s == f; }
@@ -96,8 +96,9 @@ static Config parse_args(int argc, char** argv) {
     } else if (is_flag(a, "--topk")) {
       if (++i >= argc) { std::cerr << "--topk needs a value\n"; std::exit(2); }
       cfg.topk = to_int_or_die(argv[i], "--topk");
-    } else if (is_flag(a, "--no-template")) {
-      cfg.enable_template_match = false;
+    } else if (is_flag(a, "--dedup-threshold")) {
+      if (++i >= argc) { std::cerr << "--dedup-threshold needs a value\n"; std::exit(2); }
+      cfg.dedup_threshold = to_int_or_die(argv[i], "--dedup-threshold");
     } else {
       std::cerr << "Unknown arg: " << a << "\n";
       std::exit(2);
@@ -106,6 +107,10 @@ static Config parse_args(int argc, char** argv) {
 
   if (cfg.topk <= 0) {
     std::cerr << "--topk must be > 0\n";
+    std::exit(2);
+  }
+  if (cfg.dedup_threshold <= 0) {
+    std::cerr << "--dedup-threshold must be > 0\n";
     std::exit(2);
   }
 
@@ -130,7 +135,7 @@ static void print_gpu_info(int gpu_id) {
   CUDA_CHECK(cudaSetDevice(gpu_id));
   cudaDeviceProp prop{};
   CUDA_CHECK(cudaGetDeviceProperties(&prop, gpu_id));
-  std::cerr << "[GPU] Using device " << gpu_id << ": " << prop.name
+  std::cout << "\n[GPU] Using device " << gpu_id << ": " << prop.name
             << " (cc " << prop.major << "." << prop.minor << ")\n";
 }
 
@@ -139,15 +144,17 @@ static void print_gpu_info(int gpu_id) {
 // ------------------------------------------------------------
 int main(int argc, char** argv) {
   Config cfg = parse_args(argc, argv);
-  print_gpu_info(cfg.gpu_id);
-
+ 
   // opzionale ma utile per chiarezza a runtime
   if (cfg.verbose) {
-    std::cerr << "[CFG] full_db_path=" << cfg.full_db_path << "\n";
-    std::cerr << "[CFG] query_frame_path=" << cfg.query_frame_path << "\n";
-    std::cerr << "[CFG] deduplicated_db_path=" << cfg.deduplicated_db_path << "\n";
-    std::cerr << "[CFG] topk=" << cfg.topk
-              << " template_match=" << (cfg.enable_template_match ? "on" : "off") << "\n";
+
+    std::cout << "\nINFORMAZIONI GENERALI ==================================================" << "\n";
+    print_gpu_info(cfg.gpu_id);
+    std::cout << "\n[CFG] full_db_path=" << cfg.full_db_path << "\n";
+    std::cout << "[CFG] query_frame_path=" << cfg.query_frame_path << "\n";
+    std::cout << "[CFG] deduplicated_db_path=" << cfg.deduplicated_db_path << "\n";
+    std::cout << "[CFG] topk=" << cfg.topk << "\n";
+    std::cout << "[CFG] dedup_threshold=" << cfg.dedup_threshold << "\n";
   }
 
   try {
@@ -158,7 +165,7 @@ int main(int argc, char** argv) {
       // Se vuoi che il timer includa davvero il lavoro GPU, sincronizza qui:
       CUDA_CHECK(cudaDeviceSynchronize());
 
-      std::cerr << "[BUILD DONE] frames_total=" << st.frames_total
+      std::cerr << "\n[BUILD DONE] frames_total=" << st.frames_total
                 << " frames_after_dedup=" << st.frames_after_dedup
                 << " signatures_written=" << st.signatures_written << "\n";
     }

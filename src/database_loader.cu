@@ -8,7 +8,9 @@
 #include <vector>
 #include <string>
 #include <iostream>
-#include <cstring>   
+#include <cstring>
+#include <algorithm> // sort, unique, min/max
+
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
 #include "../include/db_types.h"
@@ -20,7 +22,6 @@
 #include "./kernels_db/headers/kernel_frame_deduplication.cuh"
 #include "./kernels_db/headers/kernel_index_ahash.cuh"
 
-
 static void workspace_init(Workspace& ws, const Config& cfg) {
   ws.max_frames = cfg.chunk_frames;
   ws.w = cfg.frame_w;
@@ -31,7 +32,7 @@ static void workspace_init(Workspace& ws, const Config& cfg) {
   // Device buffers
   CUDA_CHECK(cudaMalloc(&ws.d_frames,   (size_t)ws.max_frames * ws.bytes_per_frame));
   CUDA_CHECK(cudaMalloc(&ws.d_keep,     (size_t)ws.max_frames * sizeof(uint8_t)));
-  
+
   CUDA_CHECK(cudaMalloc(&ws.d_kept_ids, (size_t)ws.max_frames * sizeof(int32_t)));
   CUDA_CHECK(cudaMalloc(&ws.d_hashes,   (size_t)ws.max_frames * sizeof(uint64_t)));
 
@@ -67,7 +68,6 @@ static void workspace_destroy(Workspace& ws) {
 
   ws = Workspace{};
 }
-
 
 static void upload_frames(Workspace& ws, const HostChunk& ch) {
   const size_t bytes = (size_t)ch.n * ws.bytes_per_frame;
@@ -153,6 +153,32 @@ static DbSoAChunk build_soa_chunk_from_results(const HostChunk& in, const Worksp
   return out;
 }
 
+//funzione che serve solo ed esclusivamente per stampare a video quanti frame sono stati ridotti per chunk
+static void verbose_print_chunk_info(const Config& cfg, int chunk_idx, const HostChunk& ch, int kept ) {
+  if (!cfg.verbose) return;
+
+  std::vector<int> vids;
+  vids.reserve((size_t)ch.n);
+  for (int i = 0; i < ch.n; ++i)
+    vids.push_back(ch.video_id[i]);
+
+  std::sort(vids.begin(), vids.end());
+  vids.erase(std::unique(vids.begin(), vids.end()), vids.end());
+
+  std::cerr << "[CHUNK " << chunk_idx << "] "
+            << "n=" << ch.n
+            << " kept=" << kept
+            << " videos={";
+
+  for (size_t i = 0; i < vids.size(); ++i) {
+    if (i) std::cerr << ",";
+    std::cerr << vids[i];
+  }
+
+  std::cerr << "}\n";
+}
+
+
 // ============================================================
 // Entry point
 // ============================================================
@@ -167,8 +193,13 @@ BuildStats carica_db(const Config& cfg) {
 
   BuildStats stats{};
 
+  int chunk_idx = 0;
+  if (cfg.verbose){
+    std::cout << "\nFASE 1: GENERAZIONE DEL NUOVO DATABASE =========================================" << "\n\n";
+  }
   try {
     while (reader.has_next()) {
+      ++chunk_idx;
       HostChunk ch = reader.next_chunk(cfg.chunk_frames, ws.bytes_per_frame);
       if (ch.n <= 0) break;
 
@@ -176,23 +207,20 @@ BuildStats carica_db(const Config& cfg) {
 
       upload_frames(ws, ch);
 
-      int kept = ch.n;
-      if (cfg.enable_dedup) {
-        run_dedup(ws, cfg, ch.n);
-        kept = run_compaction_cub(ws, ch.n);
-      } else {
-        // se dedup disabilitato, compaction deve semplicemente tenere tutti
-        kept = run_compaction_cub(ws, ch.n);
-      }
+      // dedup sempre attivo (feature toggle rimosso)
+      run_dedup(ws, cfg, ch.n);
+      int kept = run_compaction_cub(ws, ch.n);
 
       stats.frames_after_dedup += (uint64_t)kept;
 
       run_index(ws, kept);
       stats.signatures_written += (uint64_t)kept;
 
-      
-        std::cout << "chunk n=" << ch.n << " kept=" << kept << "\n";
-      
+      // output verbose per chunk (quali video + quanti frame tenuti)
+      if (cfg.verbose){
+        verbose_print_chunk_info(cfg, chunk_idx, ch, kept);
+      }
+
       download_results(ws, kept);
 
       // qui serve una sync perché usiamo ws.h_* su CPU
@@ -200,18 +228,6 @@ BuildStats carica_db(const Config& cfg) {
 
       DbSoAChunk out = build_soa_chunk_from_results(ch, ws, kept);
 
-
-      //
-      int min_vid = ch.video_id.empty() ? -1 : ch.video_id[0];
-int max_vid = min_vid;
-for (int i = 0; i < ch.n; ++i) {
-  min_vid = std::min(min_vid, ch.video_id[i]);
-  max_vid = std::max(max_vid, ch.video_id[i]);
-}
-std::cout << "chunk n=" << ch.n << " video_id range [" << min_vid << "," << max_vid << "]\n";
-//
-
-      
       writer.write_chunk(out);
     }
   } catch (...) {

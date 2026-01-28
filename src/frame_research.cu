@@ -22,9 +22,10 @@
 #include "../src/kernel_research/headers/kernel_template_sad_batch.cuh"
 #include "../src/kernel_research/headers/kernel_hist_hamming.cuh"
 #include "../src/kernel_research/headers/kernel_collect_candidates.cuh"
+
 // =============================================================================================
 // chiamata kernel per calcolare l'hash dell'immagine da ricercare 
-  static uint64_t compute_query_hash64(const std::string& imgPath, const Config& cfg) {
+static uint64_t compute_query_hash64(const std::string& imgPath, const Config& cfg) {
   //frameReader è un oggetto che permette di leggere un frame
   FrameReader fr(cfg.frame_w, cfg.frame_h, cfg.channels);
   std::vector<uint8_t> h_frame = fr.read_raw_frame(imgPath);
@@ -75,7 +76,6 @@
   return h_hash;
 }
 
-
 //===============================================================================
 // per l'individuazione della soglia minima ( guardare commento nel main )
 static uint8_t choose_threshold_for_topk(const uint32_t hist[65], int topk) {
@@ -87,8 +87,49 @@ static uint8_t choose_threshold_for_topk(const uint32_t hist[65], int topk) {
   return 64;
 }
 
+// [ADDED] helper: stampa istogramma Hamming in modo "utile"
+static void verbose_print_hamming_hist(const Config& cfg, const uint32_t hist[65], int topk, uint8_t thresh) {
+  if (!cfg.verbose) return;
 
+  std::cout << "[QUERY] Hamming histogram (Hamming dist 0–64):\n"; // [ADDED]
+  uint64_t cum = 0;                                           // [ADDED]
+  for (int d = 0; d <= 64; ++d) {                              // [ADDED]
+    if (hist[d] == 0) continue;                                // [ADDED]
+    cum += hist[d];                                            // [ADDED]
+    std::cout << "  d=" << d << " count=" << hist[d]           // [ADDED]
+              << "  cum=" << cum;                               // [ADDED]
+    if (d == (int)thresh) std::cout << "  <-- thresh";         // [ADDED]
+    std::cout << "\n";                                         // [ADDED]
+    // stop "furbo": se abbiamo già superato topk e siamo oltre la soglia, basta
+    if (cum >= (uint64_t)topk && d >= (int)thresh) break;       // [ADDED]
+  }
+}
 
+// [ADDED] helper: stampa top candidati con meta se disponibile
+static void verbose_print_top_candidates(const Config& cfg, const SoADbReader& db,
+                                        const std::vector<Cand>& cands, int max_show) {
+  if (!cfg.verbose) return;
+
+  const int show = std::min((int)cands.size(), max_show); // [ADDED]
+  std::cout << "[QUERY] Top candidates (after sort by Hamming dist), show=" << show << "\n"; // [ADDED]
+
+  const auto& vids = db.video_id();  // [ADDED]
+  const auto& fids = db.frame_id();  // [ADDED]
+
+  for (int i = 0; i < show; ++i) {   // [ADDED]
+    const auto& c = cands[i];        // [ADDED]
+    std::cout << "  #" << i
+              << " idx=" << c.idx
+              << " dist=" << (int)c.dist; // [ADDED]
+
+    // se meta è stata caricata ed è coerente, stampo video/frame id
+    if ((int)vids.size() > c.idx && (int)fids.size() > c.idx) {  // [ADDED]
+      std::cout << " video_id=" << vids[c.idx]
+                << " frame_id=" << fids[c.idx];                  // [ADDED]
+    }
+    std::cout << "\n"; // [ADDED]
+  }
+}
 
 QueryResult ricerca_frame(const Config& cfg) {
 
@@ -97,11 +138,17 @@ QueryResult ricerca_frame(const Config& cfg) {
   //inizializzo l'oggetto SoADbReader (che mi serve per leggere i file binari che compongono il nuovo database)
   SoADbReader db(cfg);
   //controlla che i contenuti (principlamente numero di byte) dei file binari siano coerenti tra di loro
-  db.validate(true, cfg.enable_template_match);
+  db.validate(true, true); // enable_template_match rimosso: la pipeline ora è sempre attiva
 
   // KERNEL 
   // calcolo l'hash del frame che carica l'utente ( questa funzione chiama poi 2 KERNEL )
   const uint64_t qhash = compute_query_hash64(cfg.query_frame_path, cfg);
+
+  if (cfg.verbose) {
+    std::cout << "\nFASE 2: RICERCA DEL FRAME ====================================================" << "\n\n";
+    std::cout << "[QUERY] query_frame_path=" << cfg.query_frame_path << "\n"; // [ADDED]
+    std::cout << "[QUERY] qhash=0x" << std::hex << qhash << std::dec << "\n"; // [ADDED]
+  }
 
   // ci permette di usare db.hashes che contiene gli hash dei frame "sopravvisuti" dopo la fram dedup
   db.load_hashes();
@@ -112,11 +159,11 @@ QueryResult ricerca_frame(const Config& cfg) {
   const int N = static_cast<int>(db.hashes().size());
   //controlli: se non ci sono frame il db è vuoto
   if (N<= 0) {
-    if (cfg.verbose) std::cerr << "[QUERY] Empty DB hashes\n";
+    if (cfg.verbose) std::cout << "[QUERY] Empty DB hashes\n"; // (cout)
     return res;
   }
   if (cfg.verbose) {
-    std::cerr << "[QUERY] N=" << N << " topk=" << cfg.topk << "\n";
+    std::cout << "[QUERY] N_frames_new_db=" << N << " topk=" << cfg.topk << "\n"; // (cout)
   }
 
   /* copio gli hash in memoria GPU ( non ci si pongono problemi di spazio, un hash ha dimensione di un byte)
@@ -154,8 +201,10 @@ QueryResult ricerca_frame(const Config& cfg) {
   const uint8_t thresh = choose_threshold_for_topk(h_hist, cfg.topk);
 
   if (cfg.verbose){
-    std::cerr << "[QUERY] Hamming threshold for topk: " << (int)thresh << "\n";
+    std::cout << "[QUERY] Hamming cutoff (max dist for topk): " << (int)thresh << "\n"; // (cout)
   }
+
+  verbose_print_hamming_hist(cfg, h_hist, cfg.topk, thresh); // [ADDED]
 
   // collezionamento dei candidati 
       /* inclusa dal file header
@@ -184,6 +233,10 @@ QueryResult ricerca_frame(const Config& cfg) {
   // prendo il minimo tra h_count e cfg.topk
   h_count = std::min(h_count, cfg.topk);
 
+  if (cfg.verbose) { // [ADDED]
+    std::cout << "[QUERY] Candidates collected: " << h_count << " (cap topk=" << cfg.topk << ")\n"; // [ADDED]
+  }
+
   std::vector<Cand> h_cands((size_t)h_count);
   if (h_count > 0) {
     CUDA_CHECK(cudaMemcpy(h_cands.data(), d_cands, (size_t)h_count * sizeof(Cand), cudaMemcpyDeviceToHost));
@@ -203,6 +256,9 @@ QueryResult ricerca_frame(const Config& cfg) {
 
     // ordiniamo i candidati, in modo da partire dal più "promettente "
     std::sort(h_cands.begin(), h_cands.end(), [](const Cand& a, const Cand& b){ return a.dist < b.dist; });
+
+    verbose_print_top_candidates(cfg, db, h_cands, 10); // [ADDED] (mostro i primi 10)
+
     // carico il frame dell'utente che useremo per fare template matching
     FrameReader fr(cfg.frame_w, cfg.frame_h, cfg.channels);
     std::vector<uint8_t> query_raw = fr.read_raw_frame(cfg.query_frame_path);
@@ -241,11 +297,18 @@ QueryResult ricerca_frame(const Config& cfg) {
     uint32_t best_score = std::numeric_limits<uint32_t>::max(); // inizializza lo score migliore al valore peggiore possibile 
     // indice nel new_DB del frame migliore 
     int best_idx = -1;    
-   
+
     // ciclo sui batch di frame
+    if (cfg.verbose){
+    std::cout << "[TM] Processing candidate chunk with template matching \n";
+    }
     for (int base = 0; base < total; base += BATCH) {
       // serve per contare il numero di frame da processare ( serve per l'ultima iterazione praticamente) 
       const int count = std::min(BATCH, total - base);
+
+      if (cfg.verbose) { // [ADDED]
+        std::cout << "[TM] batch base=" << base << " count=" << count << "\n"; // [ADDED]
+      }
 
       // leggiamo dal file binario frame.bin i frame dei candidati del batch
       for (int i = 0; i < count; ++i) {
@@ -290,6 +353,8 @@ QueryResult ricerca_frame(const Config& cfg) {
           best_dist = c.dist;
         }
       }
+
+  
     }
 
     // ---- cleanup TM
@@ -314,11 +379,10 @@ QueryResult ricerca_frame(const Config& cfg) {
     // - puoi anche salvarci best_dist in un campo separato se ti serve
     res.score = (float)best_score;
     if (cfg.verbose) {
-      std::cerr << "[QUERY] Best after TM: idx=" << best_idx
+      std::cout << "\n\n[RESULT] idx=" << best_idx
                 << " video_id=" << res.video_id
                 << " frame_id=" << res.frame_id
-                << " dist=" << (int)best_dist
-                << " tm_score=" << best_score << "\n";
+                << " dist=" << (int)best_dist;
     }
   }
 
