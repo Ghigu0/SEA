@@ -94,9 +94,11 @@ static void run_dedup(Workspace& ws, const Config& cfg, int n) {
 static void run_index(Workspace& ws, int kept) {
   if (kept <= 0) return;
 
+
+  //####################################################################################################
   // 1) mean per ciascuna delle 64 celle (8x8) per ogni frame kept
-  dim3 block1(256, 1, 1);
-  dim3 grid1((unsigned)kept, 64u, 1u);
+  dim3 block1(256, 1);
+  dim3 grid1((unsigned)kept, 64u);
 
   k_downsample8x8_cellmean_u16_kept<<<grid1, block1>>>(
       ws.d_frames,
@@ -106,17 +108,21 @@ static void run_index(Workspace& ws, int kept) {
       (int)ws.bytes_per_frame,
       ws.d_cell_mean_u16
   );
+  //####################################################################################################
+ 
   CUDA_CHECK(cudaGetLastError());
 
-  // 2) hash64 confrontando ciascuna cella con la media globale
-  dim3 block2(256, 1, 1);
-  dim3 grid2((unsigned)((kept + (int)block2.x - 1) / (int)block2.x), 1u, 1u);
+  //####################################################################################################
+  //hash64 confrontando ciascuna cella con la media globale
+  dim3 block2(256);
+  /* seguiamo la formula: gridDim((dataSize + blockSize - 1) / blockSize); 
+  in questo caso datasize = kept che è il numero di frame che abbiamo tenuto dal chunk,
+  in quanto ogni thread lavorerà sull'hash totale di un frame */
+  dim3 grid2((unsigned)((kept + (int)block2.x - 1) / (int)block2.x));
 
-  k_ahash64_from_cellmean_kept<<<grid2, block2>>>(
-      ws.d_cell_mean_u16,
-      kept,
-      ws.d_hashes
-  );
+  k_ahash64_from_cellmean_kept<<<grid2, block2>>>( ws.d_cell_mean_u16, kept, ws.d_hashes );
+  //####################################################################################################
+  
   CUDA_CHECK(cudaGetLastError());
 }
 
