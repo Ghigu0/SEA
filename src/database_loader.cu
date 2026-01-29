@@ -97,7 +97,9 @@ static void run_index(Workspace& ws, int kept) {
 
   //####################################################################################################
   // 1) mean per ciascuna delle 64 celle (8x8) per ogni frame kept
-  dim3 block1(256, 1);
+  dim3 block1(128);
+  // abbiamo sull'asse x della griglia kept ( numero di frame) e sull'asse y 64 ( vedere l'algoritmo del kernel,
+  // dove ogni frame viene diviso in 64 celle. ogni blocco si occuperà del calcolo di una cella )
   dim3 grid1((unsigned)kept, 64u);
 
   k_downsample8x8_cellmean_u16_kept<<<grid1, block1>>>(

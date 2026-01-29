@@ -73,7 +73,7 @@ __global__ void k_downsample8x8_cellmean_u16_kept(
     local_sum += (uint32_t)lum;
   }
 
-  __shared__ uint32_t sh[256];
+  __shared__ uint32_t sh[128];
   sh[threadIdx.x] = local_sum;
   __syncthreads();
 
@@ -90,28 +90,27 @@ __global__ void k_downsample8x8_cellmean_u16_kept(
 }
 
 
+
 /* l'output del kernel "k_downsample8x8_cellmean_u16_kept" produce PER OGNI FRAME 64 valori uint16.
-Il compito di questo kernel è di creare un unico valore a 64 bit ( l'has che vogliamo ottenere ) a partire dai 64 valori
+Il compito di questo kernel è di creare un unico valore a 64 bit ( l'hash che vogliamo ottenere ) a partire dai 64 valori
 iniziali*/
 
-/*
-const uint16_t* d_cell_mean_u16 tiene le media delle celle 8x8 di ogni frame 
-int kep numero di frame validi (per sapere quanti hash calcolare)
-uint64_t* d_out_hashes dove salvare il risultato
-
-*/
-__global__ void k_ahash64_from_cellmean_kept( const uint16_t* __restrict__ d_cell_mean_u16, int kept, uint64_t* __restrict__ d_out_hashes ) {
+__global__ void k_ahash64_from_cellmean_kept( 
+    const uint16_t* __restrict__ d_cell_mean_u16, //tiene le media delle celle 8x8 di ogni frame 
+    int kept,                                     // numero di frame validi (per sapere quanti hash calcolare)
+    uint64_t* __restrict__ d_out_hashes )         // per salvare il risultato
+  { 
   
   // metodo di mappatura delle coordinate
   int j = (int)blockIdx.x * (int)blockDim.x + (int)threadIdx.x;
-  /* per i thread che non hanno dati su cui lavorare ( l'ultimo blocco della
-   grid sostanzialmente) */
+  /* per i thread che non hanno dati su cui lavorare ( l'ultimo blocco della grid sostanzialmente) */
   if (j >= kept) return;
 
   const uint16_t* cells = d_cell_mean_u16 + (size_t)j * 64u;
 
   uint32_t sum = 0;
 
+  //calcolo delle media 
   #pragma unroll
   for (int k = 0; k < 64; k++) sum += (uint32_t)cells[k];
   uint16_t mean = (uint16_t)(sum / 64u);
@@ -120,7 +119,6 @@ __global__ void k_ahash64_from_cellmean_kept( const uint16_t* __restrict__ d_cel
 
   /*confronta ciascuna delle 64 celle con la media globale e codifica il 
   risultato in un hash binario a 64 bit, un bit per cella.*/
-
   #pragma unroll
   for (int k = 0; k < 64; k++) {
     uint64_t bit = (cells[k] > mean) ? 1ull : 0ull;
