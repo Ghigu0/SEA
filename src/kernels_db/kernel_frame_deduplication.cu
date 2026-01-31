@@ -1,39 +1,56 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+
+
+  // forceline indica al compilatore che questa non è una chiamata a funzione, ma verrà direttamente sostituita nel codice ( in modo da evitare appunto l'overhead di 
+  // una chiamata a funzione )
+
 __device__ __forceinline__ uint8_t rgb_to_luma_u8(uint8_t r, uint8_t g, uint8_t b) {
   // approx BT.601: Y ≈ (0.299R + 0.587G + 0.114B)
   return (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
 }
 
-__device__ __forceinline__ unsigned int uabsdiff_u8(uint8_t a, uint8_t b) {
+// calcola |a-b|
+__device__ __forceinline__ unsigned int abs_diff(uint8_t a, uint8_t b) {
   return (a > b) ? (unsigned int)(a - b) : (unsigned int)(b - a);
 }
 
+
+/*Questa funzione implementa una riduzione di somma a livello di warp utilizzando le istruzioni di shuffle. 
+I thread del warp cooperano per sommare i loro valori senza usare shared memory né sincronizzazioni esplicite.*/
+
 __device__ __forceinline__ unsigned int warp_reduce_sum(unsigned int v) {
-  // Full mask
+ 
   constexpr unsigned mask = 0xffffffffu;
-  // Reduce within warp
-  v += __shfl_down_sync(mask, v, 16);
-  v += __shfl_down_sync(mask, v, 8);
-  v += __shfl_down_sync(mask, v, 4);
+  
+  // questa itruzione permette di prendere il valore dal registro di un thread tramite lane+offset
+  v += __shfl_down_sync(mask, v, 16);// i primi 16 thread prendono il valore v che si trova 16 lane più avanti nel warp, e lo somma al prorpio v
+  v += __shfl_down_sync(mask, v, 8); // i primi 8 thread prendono il valore v che si trova 8 lane più avanti ( che rappresentavano la somma del thread x + il thread x + 16) e lo somma al proprio v
+  v += __shfl_down_sync(mask, v, 4); // e così via
   v += __shfl_down_sync(mask, v, 2);
   v += __shfl_down_sync(mask, v, 1);
   return v;
 }
 
 /*
-  dedup_kernel_downsample_sad_blockperframe
+  Deduplicazione temporale basata su downsampling e SAD 
 
-  Mapping:
-    - blockIdx.x = frame index i
-    - threads in block cooperate to compute SAD over GX*GY sampled points
-    - thread 0 writes keep[i]
+  Ogni blocco CUDA è associato a un singolo frame i del chunk.
+  I thread del blocco cooperano per confrontare il frame i con il frame precedente (i-1)
+  campionando un insieme fisso di punti distribuiti uniformemente sull’intero frame
+  (griglia GX×GY).
 
-  Requirements:
-    - grid.x >= n (launch exactly n blocks is fine)
-    - block.x should be a multiple of 32 (e.g., 128 or 256)
+  Ogni thread calcola una parte della Sum of Absolute Differences (SAD) sulla luminanza
+  dei pixel campionati.
+  Le somme parziali vengono poi ridotte prima a livello di warp
+  tramite shuffle e successivamente a livello di blocco tramite shared memory.
+
+  La SAD totale rappresenta una misura approssimata della variazione globale tra due
+  frame consecutivi: se supera una soglia prefissata (la threshold, configurabile tramite l'opzione --threshold quando 
+  si lancia il programma ) il frame viene mantenuto, altrimenti viene considerato duplicato e scartato.
 */
+
 __global__ void dedup_kernel_downsample_sad_blockperframe(
     const uint8_t* __restrict__ d_frames,
     uint8_t* __restrict__ d_keep,
@@ -42,6 +59,7 @@ __global__ void dedup_kernel_downsample_sad_blockperframe(
     int bytes_per_frame,
     int threshold)
 {
+  
   const int i = (int)blockIdx.x;
   if (i >= n) return;
 
@@ -81,7 +99,7 @@ __global__ void dedup_kernel_downsample_sad_blockperframe(
       b = prev[idx];
     }
 
-    local_sum += uabsdiff_u8(a, b);
+    local_sum += abs_diff(a, b);
   }
 
   // Reduce within each warp
