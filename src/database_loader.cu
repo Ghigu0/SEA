@@ -86,10 +86,10 @@ static void run_dedup(Workspace& ws, const Config& cfg, int n) {
   
 
   //####################################################################################################
-  dim3 block(256);
-  dim3 grid((n + block.x - 1) / block.x);
+  dim3 block(256);          // prova 128 o 256
+  dim3 grid(n);             // 1 blocco per frame
 
-  dedup_kernel_downsample_sad<<<grid, block>>>(
+  dedup_kernel_downsample_sad_blockperframe<<<grid, block>>>(
       ws.d_frames,
       ws.d_keep,
       n,
@@ -97,6 +97,8 @@ static void run_dedup(Workspace& ws, const Config& cfg, int n) {
       (int)ws.bytes_per_frame,
       cfg.dedup_threshold
   );
+
+
   //####################################################################################################
   CUDA_CHECK(cudaGetLastError());
 }

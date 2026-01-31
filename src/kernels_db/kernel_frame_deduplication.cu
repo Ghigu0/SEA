@@ -1,8 +1,126 @@
+#include <cuda_runtime.h>
+#include <cstdint>
+
+__device__ __forceinline__ uint8_t rgb_to_luma_u8(uint8_t r, uint8_t g, uint8_t b) {
+  // approx BT.601: Y ≈ (0.299R + 0.587G + 0.114B)
+  return (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
+}
+
+__device__ __forceinline__ unsigned int uabsdiff_u8(uint8_t a, uint8_t b) {
+  return (a > b) ? (unsigned int)(a - b) : (unsigned int)(b - a);
+}
+
+__device__ __forceinline__ unsigned int warp_reduce_sum(unsigned int v) {
+  // Full mask
+  constexpr unsigned mask = 0xffffffffu;
+  // Reduce within warp
+  v += __shfl_down_sync(mask, v, 16);
+  v += __shfl_down_sync(mask, v, 8);
+  v += __shfl_down_sync(mask, v, 4);
+  v += __shfl_down_sync(mask, v, 2);
+  v += __shfl_down_sync(mask, v, 1);
+  return v;
+}
+
+/*
+  dedup_kernel_downsample_sad_blockperframe
+
+  Mapping:
+    - blockIdx.x = frame index i
+    - threads in block cooperate to compute SAD over GX*GY sampled points
+    - thread 0 writes keep[i]
+
+  Requirements:
+    - grid.x >= n (launch exactly n blocks is fine)
+    - block.x should be a multiple of 32 (e.g., 128 or 256)
+*/
+__global__ void dedup_kernel_downsample_sad_blockperframe(
+    const uint8_t* __restrict__ d_frames,
+    uint8_t* __restrict__ d_keep,
+    int n,
+    int w, int h, int c,
+    int bytes_per_frame,
+    int threshold)
+{
+  const int i = (int)blockIdx.x;
+  if (i >= n) return;
+
+  // First frame always kept
+  if (i == 0) {
+    if (threadIdx.x == 0) d_keep[i] = 1;
+    return;
+  }
+
+  const uint8_t* cur  = d_frames + (size_t)i       * (size_t)bytes_per_frame;
+  const uint8_t* prev = d_frames + (size_t)(i - 1) * (size_t)bytes_per_frame;
+
+  // Sample grid (same as your original)
+  constexpr int GX = 32;
+  constexpr int GY = 18;
+  constexpr int S  = GX * GY; // 576 samples
+
+  unsigned int local_sum = 0;
+
+  // Each thread processes samples: s = tid, tid+blockDim, ...
+  for (int s = (int)threadIdx.x; s < S; s += (int)blockDim.x) {
+    const int yy = s / GX;
+    const int xx = s - yy * GX;
+
+    const int y = (yy * h) / GY;
+    const int x = (xx * w) / GX;
+
+    const int idx = (y * w + x) * c;
+
+    // Read and compute luma
+    uint8_t a, b;
+    if (c >= 3) {
+      a = rgb_to_luma_u8(cur[idx + 0],  cur[idx + 1],  cur[idx + 2]);
+      b = rgb_to_luma_u8(prev[idx + 0], prev[idx + 1], prev[idx + 2]);
+    } else {
+      a = cur[idx];
+      b = prev[idx];
+    }
+
+    local_sum += uabsdiff_u8(a, b);
+  }
+
+  // Reduce within each warp
+  unsigned int warp_sum = warp_reduce_sum(local_sum);
+
+  // One value per warp -> reduce across warps
+  __shared__ unsigned int warp_partials[32]; // enough for up to 1024 threads => 32 warps
+
+  const int lane   = (int)(threadIdx.x & 31);
+  const int warpId = (int)(threadIdx.x >> 5);
+
+  if (lane == 0) warp_partials[warpId] = warp_sum;
+  __syncthreads();
+
+  // Final reduce by first warp
+  unsigned int total = 0;
+  if (warpId == 0) {
+    // Number of warps in this block
+    const int numWarps = ((int)blockDim.x + 31) / 32;
+    total = (lane < numWarps) ? warp_partials[lane] : 0;
+    total = warp_reduce_sum(total);
+
+    if (lane == 0) {
+      d_keep[i] = (total > (unsigned int)threshold) ? 1 : 0;
+    }
+  }
+}
+
+
+
+// per reference, viene lasciata la prima versione dell'algortimo, la quale prevedeva un thread per il calcolo di un frame ( due in realtà, in quanto per capire se un frame 
+// andava tenuto o meno, veniva calcolato anche il sad del frame precedente)
+
+/*
 #include "./headers/kernel_frame_deduplication.cuh"
 #include <cstdint>
 
 
-/*Come proseguiamo (scelta concreta per v1)
+Come proseguiamo (scelta concreta per v1)
 
 Implementiamo una dedup temporale così:
 
@@ -15,7 +133,7 @@ sulla luminanza. La SAD risultante fornisce una misura approssimata della variaz
 Se SAD <= threshold → consideriamo il frame duplicato → keep=0
                                            Altrimenti → keep=1
 
-Nota sull'algoritmo: si confronta il frame[i] con il frame[i-1] anche se il frame[i-1] è stato marcato come duplicato (keep=0).*/
+Nota sull'algoritmo: si confronta il frame[i] con il frame[i-1] anche se il frame[i-1] è stato marcato come duplicato (keep=0).
 
 
   // forceline indica al compilatore che questa non è una chiamata a funzione, ma verrà direttamente sostituita nel codice ( in modo da evitare appunto l'overhead di 
@@ -82,7 +200,19 @@ __global__ void dedup_kernel_downsample_sad(
 
 
 
-/*, l’approccio 1 thread = 1 frame ricalcola due volte la luminanza campionata per i frame interni. 
+, l’approccio 1 thread = 1 frame ricalcola due volte la luminanza campionata per i frame interni. 
 Tuttavia il tentativo di riusare tali valori in shared memory non è praticabile perché richiederebbe 
 memorizzare GX×GY campioni per molti frame del blocco, superando la shared memory disponibile, e 
 inoltre non permette condivisione tra blocchi.*/
+
+
+
+
+
+
+
+
+
+
+
+
