@@ -1,2 +1,2 @@
-sudo ncu -k k_downsample8x8_cellmean_u16_kept -o ncu_report ./sea ./database/ ./database/Video_3/frame_000130.raw --topk 50 --chunk-frame 1200
+sudo ncu -k k_downsample8x8_cellmean_u16_kept -o ncu_report ./sea ./database/ ./database/Video_3/frame_000130.raw --topk 50 --chunk-frames 1200
 

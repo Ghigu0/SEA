@@ -84,6 +84,8 @@ static void run_dedup(Workspace& ws, const Config& cfg, int n) {
   CUDA_CHECK(cudaMemsetAsync(ws.d_keep, 0, (size_t)n * sizeof(uint8_t), 0));
 
   
+
+  //####################################################################################################
   dim3 block(256);
   dim3 grid((n + block.x - 1) / block.x);
 
@@ -95,6 +97,7 @@ static void run_dedup(Workspace& ws, const Config& cfg, int n) {
       (int)ws.bytes_per_frame,
       cfg.dedup_threshold
   );
+  //####################################################################################################
   CUDA_CHECK(cudaGetLastError());
 }
 
