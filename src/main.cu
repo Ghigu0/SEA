@@ -47,7 +47,8 @@ static void print_usage(const char* prog) {
       << "  --gpu <id>              GPU id (default 0)\n"
       << "  --verbose               Logging verboso\n"
       << "  --topk <k>              Numero candidati per template matching (fase query)\n"
-      << "  --dedup-threshold <t>   SAD threshold for frame deduplication (fase build)\n";
+      << "  --dedup-threshold <t>   SAD threshold for frame deduplication (fase build)\n"
+      << "  --chunk-frames <n>      Numero di frame per chunk/batch (default 128)\n";
 }
 
 static bool is_flag(const std::string& s, const char* f) { return s == f; }
@@ -98,6 +99,9 @@ static Config parse_args(int argc, char** argv) {
     } else if (is_flag(a, "--dedup-threshold")) {
       if (++i >= argc) { std::cerr << "--dedup-threshold needs a value\n"; std::exit(2); }
       cfg.dedup_threshold = to_int_or_die(argv[i], "--dedup-threshold");
+    } else if (is_flag(a, "--chunk-frames")) {
+      if (++i >= argc) { std::cerr << "--chunk-frames needs a value\n"; std::exit(2); }
+      cfg.chunk_frames = to_int_or_die(argv[i], "--chunk-frames");
     } else {
       std::cerr << "Unknown arg: " << a << "\n";
       std::exit(2);
@@ -110,6 +114,10 @@ static Config parse_args(int argc, char** argv) {
   }
   if (cfg.dedup_threshold <= 0) {
     std::cerr << "--dedup-threshold must be > 0\n";
+    std::exit(2);
+  }
+  if (cfg.chunk_frames <= 0) {
+    std::cerr << "--chunk-frames must be > 0\n";
     std::exit(2);
   }
 
@@ -145,7 +153,7 @@ int main(int argc, char** argv) {
 
   ScopedTimer total("total_time_program: ");
   Config cfg = parse_args(argc, argv);
- 
+
   // opzionale ma utile per chiarezza a runtime
   if (cfg.verbose) {
 
@@ -154,21 +162,23 @@ int main(int argc, char** argv) {
     std::cout << "\n[CFG] full_db_path=" << cfg.full_db_path << "\n";
     std::cout << "[CFG] query_frame_path=" << cfg.query_frame_path << "\n";
     std::cout << "[CFG] deduplicated_db_path=" << cfg.deduplicated_db_path << "\n";
+    std::cout << "[CFG] frame_w=" << cfg.frame_w << " frame_h=" << cfg.frame_h
+              << " channels=" << cfg.channels << "\n";
+    std::cout << "[CFG] chunk_frames=" << cfg.chunk_frames << "\n";
     std::cout << "[CFG] topk=" << cfg.topk << "\n";
     std::cout << "[CFG] dedup_threshold=" << cfg.dedup_threshold << "\n";
   }
 
   try {
     {
-      
       BuildStats st = carica_db(cfg);
 
       // Se vuoi che il timer includa davvero il lavoro GPU, sincronizza qui:
       CUDA_CHECK(cudaDeviceSynchronize());
       if (cfg.verbose){
-      std::cout << "\n[BUILD DONE] frames_total=" << st.frames_total
-                << " frames_after_dedup=" << st.frames_after_dedup
-                << " signatures_written=" << st.signatures_written << "\n";
+        std::cout << "\n[BUILD DONE] frames_total=" << st.frames_total
+                  << " frames_after_dedup=" << st.frames_after_dedup
+                  << " signatures_written=" << st.signatures_written << "\n";
       }
     }
 

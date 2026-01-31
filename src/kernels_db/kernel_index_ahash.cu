@@ -87,7 +87,7 @@ __global__ void k_downsample8x8_cellmean_u16_kept(
 
 
   // dichiariamo nella shared memory una struttura per raccogliere tutti i risultati dei thread 
-  __shared__ uint32_t sh[256];
+  __shared__ uint32_t sh[128];
 
   sh[threadIdx.x] = local_sum;
   // barriera di sincronizzazione necessaria, in quanto al passo dopo per calcolare la media dovremo proprio leggere questi valori

@@ -11,5 +11,5 @@ $NSYS profile \
   --stats=true \
   -o sea_first \
   -- \
-  ./sea ./database/ ./database/Video_3/frame_000130.raw --topk 50
+  ./sea ./database/ ./database/Video_3/frame_000130.raw --topk 50 --chunk-frames 1200
 

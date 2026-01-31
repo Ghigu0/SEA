@@ -47,6 +47,11 @@ static void workspace_init(Workspace& ws, const Config& cfg) {
   CUDA_CHECK(cudaMallocHost(&ws.h_hashes,   (size_t)ws.max_frames * sizeof(uint64_t)));
   CUDA_CHECK(cudaMallocHost(&ws.h_kept_ids, (size_t)ws.max_frames * sizeof(int32_t)));
 
+  if (cfg.verbose){
+   size_t freeB=0, totalB=0;
+cudaMemGetInfo(&freeB, &totalB);
+std::cout << "GPU mem free=" << (freeB/1024/1024) << " MiB / total=" << (totalB/1024/1024) << " MiB\n";
+  }
   // temp CUB (allocato "lazy" dentro run_compaction_cub di solito)
   ws.d_temp = nullptr;
   ws.d_temp_bytes = 0;
@@ -75,8 +80,10 @@ static void upload_frames(Workspace& ws, const HostChunk& ch) {
 }
 
 static void run_dedup(Workspace& ws, const Config& cfg, int n) {
+
   CUDA_CHECK(cudaMemsetAsync(ws.d_keep, 0, (size_t)n * sizeof(uint8_t), 0));
 
+  
   dim3 block(256);
   dim3 grid((n + block.x - 1) / block.x);
 
