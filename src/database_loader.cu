@@ -1,6 +1,11 @@
-// database_loader.cu
-// Build DB: load -> upload -> dedup -> compaction -> index -> download -> pack -> write (SoA)
 
+// l'avvio dei kernel è segnalato nei blocchi di codice delimitati dal commento: 
+
+//##############################################
+// lancio del kernel
+//##############################################
+
+// tuttavia il codice sorgente dei kernel è presente in una cartella separata ( la cartella "kernel")
 #include <cuda_runtime.h>
 
 #include <cstdint>
@@ -9,7 +14,7 @@
 #include <string>
 #include <iostream>
 #include <cstring>
-#include <algorithm> // sort, unique, min/max
+#include <algorithm> 
 
 #include "../include/config.h"
 #include "../include/cuda_utils.h"
@@ -22,6 +27,9 @@
 #include "./kernels_db/headers/kernel_frame_deduplication.cuh"
 #include "./kernels_db/headers/kernel_index_ahash.cuh"
 
+
+//====================================================================================================================
+// si utilizza un worksapce in modo da effettuare le operazioni di malloc una sola volta per evitare overhead inutili
 static void workspace_init(Workspace& ws, const Config& cfg) {
   ws.max_frames = cfg.chunk_frames;
   ws.w = cfg.frame_w;
@@ -29,34 +37,34 @@ static void workspace_init(Workspace& ws, const Config& cfg) {
   ws.c = cfg.channels;
   ws.bytes_per_frame = static_cast<size_t>(ws.w) * ws.h * ws.c;
 
-  // Device buffers
+  // buffer device
   CUDA_CHECK(cudaMalloc(&ws.d_frames,   (size_t)ws.max_frames * ws.bytes_per_frame));
   CUDA_CHECK(cudaMalloc(&ws.d_keep,     (size_t)ws.max_frames * sizeof(uint8_t)));
 
   CUDA_CHECK(cudaMalloc(&ws.d_kept_ids, (size_t)ws.max_frames * sizeof(int32_t)));
   CUDA_CHECK(cudaMalloc(&ws.d_hashes,   (size_t)ws.max_frames * sizeof(uint64_t)));
 
-  // CUB compaction helpers
+  // helpers per funzioni CUB
   CUDA_CHECK(cudaMalloc(&ws.d_all_ids,    (size_t)ws.max_frames * sizeof(int32_t)));
   CUDA_CHECK(cudaMalloc(&ws.d_kept_count, sizeof(int32_t)));
 
-  // temp per aHash (kept * 64)
+  // buffer di supporto per fnzione hash
   CUDA_CHECK(cudaMalloc(&ws.d_cell_mean_u16, (size_t)ws.max_frames * 64u * sizeof(uint16_t)));
 
-  // Host pinned buffers (download veloce)
+  // buffer PINNED sulla memoria host (uno contiene gli hash finali dei frame sopravvissuti alla dedup. e l'latro gli indici dei frame tenuti nel chunk originale)
+  // questo ci permette intanto di evitare i pagefault, e di effettuare una vera cudaMemcpy asincrona
   CUDA_CHECK(cudaMallocHost(&ws.h_hashes,   (size_t)ws.max_frames * sizeof(uint64_t)));
   CUDA_CHECK(cudaMallocHost(&ws.h_kept_ids, (size_t)ws.max_frames * sizeof(int32_t)));
 
-  if (cfg.verbose){
-   size_t freeB=0, totalB=0;
-cudaMemGetInfo(&freeB, &totalB);
-std::cout << "GPU mem free=" << (freeB/1024/1024) << " MiB / total=" << (totalB/1024/1024) << " MiB\n";
-  }
   // temp CUB (allocato "lazy" dentro run_compaction_cub di solito)
   ws.d_temp = nullptr;
   ws.d_temp_bytes = 0;
 }
 
+
+
+//====================================================================================================================
+// per liberare la memoria quando non serve più il worksapce
 static void workspace_destroy(Workspace& ws) {
   if (ws.d_temp)         cudaFree(ws.d_temp);
   if (ws.d_cell_mean_u16)cudaFree(ws.d_cell_mean_u16);
@@ -74,21 +82,24 @@ static void workspace_destroy(Workspace& ws) {
   ws = Workspace{};
 }
 
+
+//====================================================================================================================
+// trasferisce il chunk corrente di frame dalla CPU alla GPU
 static void upload_frames(Workspace& ws, const HostChunk& ch) {
   const size_t bytes = (size_t)ch.n * ws.bytes_per_frame;
   CUDA_CHECK(cudaMemcpyAsync(ws.d_frames, ch.frames.data(), bytes, cudaMemcpyHostToDevice, 0));
 }
 
-static void run_dedup(Workspace& ws, const Config& cfg, int n) {
 
+//====================================================================================================================
+// lancio del kernel della deduplicazione del database
+static void run_dedup(Workspace& ws, const Config& cfg, int n) {
   CUDA_CHECK(cudaMemsetAsync(ws.d_keep, 0, (size_t)n * sizeof(uint8_t), 0));
 
-  
-
-  //####################################################################################################
-  dim3 block(256);          // prova 128 o 256
-  dim3 grid(n);             // 1 blocco per frame
-
+  //###########################################################
+  dim3 block(256);       
+  // un blocco per frame  
+  dim3 grid(n);             
   dedup_kernel_downsample_sad_blockperframe<<<grid, block>>>(
       ws.d_frames,
       ws.d_keep,
@@ -96,19 +107,16 @@ static void run_dedup(Workspace& ws, const Config& cfg, int n) {
       ws.w, ws.h, ws.c,
       (int)ws.bytes_per_frame,
       cfg.dedup_threshold
-  );
-
-
-  //####################################################################################################
+  );//#########################################################
   CUDA_CHECK(cudaGetLastError());
 }
 
+
+//====================================================================================================================
+// lancio del kernel per l'hashing dei frame keep
 static void run_index(Workspace& ws, int kept) {
-  if (kept <= 0) return;
-
-
-  //####################################################################################################
-  // 1) mean per ciascuna delle 64 celle (8x8) per ogni frame kept
+  //###########################################################
+ 
   dim3 block1(128);
   // abbiamo sull'asse x della griglia kept ( numero di frame) e sull'asse y 64 ( vedere l'algoritmo del kernel,
   // dove ogni frame viene diviso in 64 celle. ogni blocco si occuperà del calcolo di una cella )
@@ -121,32 +129,35 @@ static void run_index(Workspace& ws, int kept) {
       ws.w, ws.h, ws.c,
       (int)ws.bytes_per_frame,
       ws.d_cell_mean_u16
-  );
-  //####################################################################################################
+  );//##########################################################
  
   CUDA_CHECK(cudaGetLastError());
 
-  //####################################################################################################
-  //hash64 confrontando ciascuna cella con la media globale
+  //############################################################
   dim3 block2(256);
   /* seguiamo la formula: gridDim((dataSize + blockSize - 1) / blockSize); 
   in questo caso datasize = kept che è il numero di frame che abbiamo tenuto dal chunk,
   in quanto ogni thread lavorerà sull'hash totale di un frame */
   dim3 grid2((unsigned)((kept + (int)block2.x - 1) / (int)block2.x));
 
+  // kernel che difatto calcola l'ahash di ogni frame
   k_ahash64_from_cellmean_kept<<<grid2, block2>>>( ws.d_cell_mean_u16, kept, ws.d_hashes );
-  //####################################################################################################
+  //#############################################################
   
   CUDA_CHECK(cudaGetLastError());
 }
 
+
+//====================================================================================================================
+// passaggio dei risultati da GPU a CPU
 static void download_results(Workspace& ws, int kept) {
-  CUDA_CHECK(cudaMemcpyAsync(ws.h_hashes, ws.d_hashes, (size_t)kept * sizeof(uint64_t),
-                             cudaMemcpyDeviceToHost, 0));
-  CUDA_CHECK(cudaMemcpyAsync(ws.h_kept_ids, ws.d_kept_ids, (size_t)kept * sizeof(int32_t),
-                             cudaMemcpyDeviceToHost, 0));
+  CUDA_CHECK(cudaMemcpyAsync(ws.h_hashes, ws.d_hashes, (size_t)kept * sizeof(uint64_t), cudaMemcpyDeviceToHost, 0));
+  CUDA_CHECK(cudaMemcpyAsync(ws.h_kept_ids, ws.d_kept_ids, (size_t)kept * sizeof(int32_t), cudaMemcpyDeviceToHost, 0));
 }
 
+
+//====================================================================================================================
+// prepara le informazioni da scrivere nel nuovo database, a partire dai risultati post operazione del chunk letto
 static DbSoAChunk build_soa_chunk_from_results(const HostChunk& in, const Workspace& ws, int kept) {
   DbSoAChunk out;
   out.hashes.resize(kept);
@@ -173,7 +184,8 @@ static DbSoAChunk build_soa_chunk_from_results(const HostChunk& in, const Worksp
   return out;
 }
 
-//funzione che serve solo ed esclusivamente per stampare a video quanti frame sono stati ridotti per chunk
+//====================================================================================================================
+//funzione che serve solo ed esclusivamente per stampare sul terminale quanti frame sono stati ridotti per chunk
 static void verbose_print_chunk_info(const Config& cfg, int chunk_idx, const HostChunk& ch, int kept ) {
   if (!cfg.verbose) return;
 
@@ -199,9 +211,8 @@ static void verbose_print_chunk_info(const Config& cfg, int chunk_idx, const Hos
 }
 
 
-// ============================================================
-// Entry point
-// ============================================================
+//====================================================================================================================
+// funzione chiamata dal main
 BuildStats carica_db(const Config& cfg) {
   CUDA_CHECK(cudaSetDevice(cfg.gpu_id));
 

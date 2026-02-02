@@ -18,15 +18,12 @@
 #include "../include/frame_research.h"
 #include "../include/I_O/winner_frame.h"
 
-// ------------------------------------------------------------
-// Timer RAII (debug)
-// ------------------------------------------------------------
+//====================================================================================================================
+// per cronometrare il tempo di esecuzione dell'applicazione
 struct ScopedTimer {
   std::string name;
   std::chrono::high_resolution_clock::time_point t0;
-
   explicit ScopedTimer(std::string n): name(std::move(n)), t0(std::chrono::high_resolution_clock::now()) {}
-
   ~ScopedTimer() {
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -34,23 +31,26 @@ struct ScopedTimer {
   }
 };
 
-// ------------------------------------------------------------
-// CLI parsing
-// ------------------------------------------------------------
+
+//====================================================================================================================
+// per cronometrare il tempo di esecuzione dell'applicazione
 static void print_usage(const char* prog) {
   std::cout
       << "Usage:\n"
       << "  " << prog << " <full-db_PATH> <frame_PATH> [options]\n"
       << "Notes:\n"
-      << "  The deduplicated DB will be written to: ./newDB (relative to current working directory)\n"
+      << "  The deduplicated database will be written to: ./newDB\n"
       << "Options:\n"
       << "  --gpu <id>              GPU id (default 0)\n"
-      << "  --verbose               Logging verboso\n"
-      << "  --topk <k>              Numero candidati per template matching (fase query)\n"
-      << "  --dedup-threshold <t>   SAD threshold for frame deduplication (fase build)\n"
-      << "  --chunk-frames <n>      Numero di frame per chunk/batch (default 128)\n";
+      << "  --verbose               Verbose logging\n"
+      << "  --topk <k>              Number of candidates for template matching (query phase)\n"
+      << "  --dedup-threshold <t>   SAD threshold for frame deduplication (build phase)\n"
+      << "  --chunk-frames <n>      Number of frames per chunk/batch (default 128)\n";
 }
 
+
+//====================================================================================================================
+// funzioni per il parsing delle opzioni
 static bool is_flag(const std::string& s, const char* f) { return s == f; }
 
 static int to_int_or_die(const std::string& s, const char* what) {
@@ -124,9 +124,9 @@ static Config parse_args(int argc, char** argv) {
   return cfg;
 }
 
-// ------------------------------------------------------------
-// GPU info
-// ------------------------------------------------------------
+
+//====================================================================================================================
+// per stampare le informazioni relative alla scheda GPU che si sta utilizzando
 static void print_gpu_info(int gpu_id) {
   int count = 0;
   CUDA_CHECK(cudaGetDeviceCount(&count));
@@ -146,15 +146,17 @@ static void print_gpu_info(int gpu_id) {
             << " (cc " << prop.major << "." << prop.minor << ")\n";
 }
 
-// ------------------------------------------------------------
-// main
-// ------------------------------------------------------------
+
+
+//====================================================================================================================
+//main
 int main(int argc, char** argv) {
 
   ScopedTimer total("total_time_program: ");
+  //parsing degli argomenti
   Config cfg = parse_args(argc, argv);
 
-  // opzionale ma utile per chiarezza a runtime
+  // le stampe avvengono solo se l'opzione verbose è attiva
   if (cfg.verbose) {
 
     std::cout << "\nINFORMAZIONI GENERALI ==================================================" << "\n";
@@ -170,22 +172,22 @@ int main(int argc, char** argv) {
   }
 
   try {
-    {
-      BuildStats st = carica_db(cfg);
+    
+    // prima fase del programma: caricamento e deduplicazione del database
+    BuildStats st = carica_db(cfg);
 
-      // Se vuoi che il timer includa davvero il lavoro GPU, sincronizza qui:
-      CUDA_CHECK(cudaDeviceSynchronize());
-      if (cfg.verbose){
-        std::cout << "\n[BUILD DONE] frames_total=" << st.frames_total
-                  << " frames_after_dedup=" << st.frames_after_dedup
-                  << " signatures_written=" << st.signatures_written << "\n";
-      }
+    // non si può iniziare la seconda fase di ricerca se non è garantito che la prima fase sia finita
+    CUDA_CHECK(cudaDeviceSynchronize());
+    if (cfg.verbose){
+      std::cout << "\n[BUILD DONE] frames_total=" << st.frames_total
+                << " frames_after_dedup=" << st.frames_after_dedup
+                << " signatures_written=" << st.signatures_written << "\n";
     }
-
-    // TODO: quando implementi la fase query, chiamala qui.
+    
+    //seconda fase del programma: ricerca del frame
     QueryResult r = ricerca_frame(cfg);
 
-    // se ricerca_frame lancia kernel, questa sync aiuta a beccare errori e garantisce completion
+    // necessaria configurazione per salvare poi il frame vincitore della ricerca
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // salvo il frame vincitore

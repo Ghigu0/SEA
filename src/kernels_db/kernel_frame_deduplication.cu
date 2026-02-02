@@ -52,73 +52,83 @@ __device__ __forceinline__ unsigned int warp_reduce_sum(unsigned int v) {
 */
 
 __global__ void dedup_kernel_downsample_sad_blockperframe(
-    const uint8_t* __restrict__ d_frames,
-    uint8_t* __restrict__ d_keep,
-    int n,
+    const uint8_t* __restrict__ d_frames,                   // puntatore alla memoria globale che contiene tutti i frame del chunk
+    uint8_t* __restrict__ d_keep,                           // output degli indici da tenere 
+    int n,                      
     int w, int h, int c,
     int bytes_per_frame,
-    int threshold)
+    int threshold)                                          //threshold che decide quando scartare o meno un frame in base al SAD 
 {
   
+  // un blocco lavora su un frame ( più avanti si userà anche thread.idx )
   const int i = (int)blockIdx.x;
   if (i >= n) return;
 
-  // First frame always kept
+  // il primo frame lo teniamo, in quanto non possiamo confrontarlo con uno precedente
   if (i == 0) {
     if (threadIdx.x == 0) d_keep[i] = 1;
     return;
   }
 
+  // ottengo il puntatore al frame corrente, e al frame precedente con il quale effettuare il confronto
   const uint8_t* cur  = d_frames + (size_t)i       * (size_t)bytes_per_frame;
   const uint8_t* prev = d_frames + (size_t)(i - 1) * (size_t)bytes_per_frame;
 
-  // Sample grid (same as your original)
+  // valori della sottogriglia del frame che verrà usata per il confronto
   constexpr int GX = 32;
   constexpr int GY = 18;
   constexpr int S  = GX * GY; // 576 samples
 
   unsigned int local_sum = 0;
 
-  // Each thread processes samples: s = tid, tid+blockDim, ...
+  /* Loop grid–stride: ogni thread processa più campioni della griglia GX×GY.
+   Ogni campione è mappato a una posizione (x,y) nel frame; si calcola la
+   differenza assoluta di luminanza tra frame corrente e precedente e la si
+   accumula nella SAD locale del thread. */
+
+  //ogni thread elabora un primo pixel diverso, e poi il pixel in posizione corrente+blockdim.x
   for (int s = (int)threadIdx.x; s < S; s += (int)blockDim.x) {
+   
+    //tramuta il numero s del pixel in coordinate di pixel della sottogriglia
     const int yy = s / GX;
     const int xx = s - yy * GX;
-
+    // tramuta le coordinate della sottogriglia in coordinate reali del frame 
     const int y = (yy * h) / GY;
     const int x = (xx * w) / GX;
 
+    // ottengo il pixel specifico 
     const int idx = (y * w + x) * c;
 
-    // Read and compute luma
+    // il frame è salvato con metodo RGB intervaleated
     uint8_t a, b;
-    if (c >= 3) {
-      a = rgb_to_luma_u8(cur[idx + 0],  cur[idx + 1],  cur[idx + 2]);
-      b = rgb_to_luma_u8(prev[idx + 0], prev[idx + 1], prev[idx + 2]);
-    } else {
-      a = cur[idx];
-      b = prev[idx];
-    }
-
+    
+    a = rgb_to_luma_u8(cur[idx + 0],  cur[idx + 1],  cur[idx + 2]);
+    b = rgb_to_luma_u8(prev[idx + 0], prev[idx + 1], prev[idx + 2]);
+    
     local_sum += abs_diff(a, b);
   }
 
-  // Reduce within each warp
+  // somma tutte le somme locali dei thread all'interno di un singolo warp
   unsigned int warp_sum = warp_reduce_sum(local_sum);
 
-  // One value per warp -> reduce across warps
-  __shared__ unsigned int warp_partials[32]; // enough for up to 1024 threads => 32 warps
+  //  alloca un array in shared memory per far salvare a ogni warp la sua somma
+  __shared__ unsigned int warp_partials[32]; 
 
+  //calcolo lane id
   const int lane   = (int)(threadIdx.x & 31);
+  //calcolo warpid
   const int warpId = (int)(threadIdx.x >> 5);
-
+  //solo il primo thread per ogni warp scrive il valore nella shared memory
   if (lane == 0) warp_partials[warpId] = warp_sum;
   __syncthreads();
 
-  // Final reduce by first warp
+  // calcolo della somma finale dei valori dei warp
   unsigned int total = 0;
+  // solo il warp 0 del blocco entra 
   if (warpId == 0) {
-    // Number of warps in this block
+    // alcola quanti warp ci sono nel blocco 
     const int numWarps = ((int)blockDim.x + 31) / 32;
+    //riduzione intra warp
     total = (lane < numWarps) ? warp_partials[lane] : 0;
     total = warp_reduce_sum(total);
 
