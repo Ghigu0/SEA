@@ -1,1 +1,0 @@
-ffplay -f rawvideo -pixel_format rgb24 -video_size 1280x720 //file cliccato
