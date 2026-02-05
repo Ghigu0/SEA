@@ -13,7 +13,7 @@ struct Config {
     int frame_w = 1280;               // larghezza frame (es. 1280x720)
     int frame_h = 720;                // altezza frame
     int channels = 3;                 // 1=grayscale, 3=RGB
-    int chunk_frames = 128;           // batch/chunk size
+    int chunk_frames = 1200;           // batch/chunk size
 
    
     //giochiamo intorno a questo valore qua, per ora nei 2 video uguale, salva circa la metà  
