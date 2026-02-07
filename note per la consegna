@@ -1,0 +1,6 @@
+L’eseguibile fornito è stato compilato su sistema Linux a 64 bit (x86_64) utilizzando NVIDIA CUDA.
+Il programma richiede una GPU NVIDIA compatibile con CUDA e driver correttamente installati.
+L’eseguibile non è portabile tra sistemi operativi diversi e potrebbe non funzionare su architetture CPU differenti (es. ARM).
+In caso di incompatibilità, il progetto può essere ricompilato a partire dal codice sorgente.
+
+il file build.sh permette comunque ti compilare il programma.

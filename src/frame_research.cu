@@ -378,12 +378,12 @@ QueryResult ricerca_frame(const Config& cfg) {
     // - se è SAD: più basso = meglio
     // - puoi anche salvarci best_dist in un campo separato se ti serve
     res.score = (float)best_score;
-    if (cfg.verbose) {
+    
       std::cout << "\n\n[RESULT] idx=" << best_idx
                 << " video_id=" << res.video_id
                 << " frame_id=" << res.frame_id
                 << " dist=" << (int)best_dist;
-    }
+    
   }
 
   return res;
